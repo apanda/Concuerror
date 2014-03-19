@@ -1129,6 +1129,10 @@ system_wrapper_loop(Name, Wrapped, Scheduler) ->
         error_logger ->
           erlang:send(Wrapped, Data),
           Scheduler ! {trapping, false},
+          ok;
+        _ ->
+          erlang:send(Wrapped, Data),
+          Scheduler ! {trapping, false},
           ok
       end
   end,
