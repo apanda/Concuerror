@@ -317,7 +317,7 @@ run_built_in(erlang, is_process_alive, 1, [Pid], Info) ->
   #concuerror_info{processes = Processes} = Info,
   Return =
     case ets:lookup(Processes, Pid) of
-      [] -> throw(unknown_process);
+      [] -> erlang:is_process_alive(Pid);
       [?process_pat_pid_status(Pid, Status)] -> is_active(Status)
     end,
   {Return, Info};
@@ -1105,13 +1105,46 @@ system_ets_entries(EtsTables) ->
 
 system_processes_wrappers(Processes) ->
   Scheduler = self(),
+  GroupLeaders = group_leaders(),
+  io:format("Group leader information ~p~n~n", [GroupLeaders]),
+  %io:format("Group        information ~p~n", [group_mapping()]),
   Map =
     fun(Name) ->
         Fun = fun() -> system_wrapper_loop(Name, whereis(Name), Scheduler) end,
         Pid = spawn_link(Fun),
-        ?new_system_process(Pid, Name)
+        {whereis(Name), {Pid, Name}}
     end,
-  ets:insert(Processes, [Map(Name) || Name <- registered()]).
+  SystemProcesses = [Map(Name) || Name <- registered()],
+  io:format("SystemProcesses are ~p~n~n", [SystemProcesses]),
+  correct_group_leaders(GroupLeaders, SystemProcesses),
+  io:format("Group leader information ~p~n~n", [group_leaders()]),
+  ets:insert(Processes, [?new_system_process(Pid, Name) || {_, {Pid, Name}} <- SystemProcesses]).
+
+group_leaders() ->
+  [{Me, proplists:get_value(group_leader, erlang:process_info(Me))} || Me <- processes()].
+%group_mapping() ->
+  %[{whereis(Me), Me} || Me <- registered()].
+%group_leader_info(Leaders) ->
+  %[erlang:process_info(Leader) || {_, Leader} <- Leaders].
+
+correct_group_leaders(GroupLeaders, SystemProcesses) ->
+  Self = self(),
+  case GroupLeaders of
+    [{Self,_}|Rest] ->
+      correct_group_leaders(Rest, SystemProcesses);
+    [{Pid, Leader}|Rest] ->
+      Prop = proplists:get_value(Leader, SystemProcesses),
+      true = case Prop of
+        undefined -> true;
+        {ModLeader, _} ->
+           io:format("~p: Trying to set group leader for ~p~n", [self(), Pid]),
+           Res = erlang:group_leader(ModLeader, Pid),
+           io:format("Done result is ~p~n", [Res]),
+           Res
+      end,
+      correct_group_leaders(Rest, SystemProcesses);
+    [] -> ok
+  end.
 
 system_wrapper_loop(Name, Wrapped, Scheduler) ->
   receive
