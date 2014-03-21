@@ -84,6 +84,7 @@ backend_run(Options) ->
       ok
   end,
   Processes = ets:new(processes, [public]),
+  SProcesses = ets:new(sprocesses, [public, named_table]),
   LoggerOptions =
     [{processes, Processes} |
      [O || O <- Options, concuerror_options:filter_options('logger', O)]
@@ -97,7 +98,8 @@ backend_run(Options) ->
     [O || O <- Options, concuerror_options:filter_options('process', O)],
   ProcessOptions =
     [{logger, Logger},
-     {processes, Processes}|
+     {processes, Processes},
+     {sprocesses, SProcesses}|
      ProcessOptions0],
   ?debug(Logger, "Starting first process...~n",[]),
   FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions),
@@ -778,7 +780,7 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   %% Message delivery always succeeds
   %% This just makes sure there are no messages waiting in the queue right now.
   assert_no_messages(),
-  io:format("~p sending {~p, ~p} to ~p~n", [self(), Type, Message, Recipient]),
+  %io:format("~p sending {~p, ~p} to ~p~n", [self(), Type, Message, Recipient]),
   Recipient ! {Type, Message},
   UpdatedEvent =
     receive
@@ -815,13 +817,13 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   {ok, UpdatedEvent};
 get_next_event_backend(#event{actor = Pid} = Event, State) when is_pid(Pid) ->
   assert_no_messages(),
-  io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
+  %io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
   Pid ! Event,
   get_next_event_backend_loop(Event, State).
 
 get_next_event_backend_loop(Trigger, State) ->
   #scheduler_state{wait = Wait} = State,
-  io:format("~p waiting~n", [self()]),
+  %io:format("~p waiting~n", [self()]),
   receive
     exited -> exited;
     {blocked, _} -> retry;

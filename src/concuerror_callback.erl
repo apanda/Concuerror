@@ -63,6 +63,7 @@
           monitors                   :: monitors(),
           next_event = none          :: 'none' | event(),
           processes                  :: processes(),
+          sprocesses           :: processes(),
           scheduler                  :: pid(),
           stacktop = 'none'          :: 'none' | tuple(),
           status = exited            :: 'exited'| 'exiting' | 'running' | 'waiting'
@@ -75,8 +76,8 @@
 -spec spawn_first_process(options()) -> pid().
 
 spawn_first_process(Options) ->
-  [AfterTimeout, Logger, Processes, Modules] =
-    get_properties(['after-timeout', logger, processes, modules], Options),
+  [AfterTimeout, Logger, Processes, SProcesses, Modules] =
+    get_properties(['after-timeout', logger, processes, sprocesses, modules], Options),
   EtsTables = ets:new(ets_tables, [public]),
   InitialInfo =
     #concuerror_info{
@@ -87,10 +88,11 @@ spawn_first_process(Options) ->
        modules         = Modules,
        monitors        = ets:new(monitors, [bag, public]),
        processes       = Processes,
+       sprocesses      = SProcesses,
        scheduler       = self()
       },
   system_ets_entries(EtsTables),
-  system_processes_wrappers(Processes),
+  system_processes_wrappers(Processes, SProcesses),
   spawn_link(fun() -> process_top_loop(InitialInfo, "P") end).
 
 get_properties(Props, PropList) ->
@@ -216,9 +218,9 @@ built_in(erlang, get, _Arity, Args, _Location, Info) ->
   {{didit, erlang:apply(erlang,get,Args)}, Info};
 %% XXX: Check if its redundant (e.g. link to already linked)
 built_in(Module, Name, Arity, Args, Location, InfoIn) ->
-  io:format("~p built_in ~p ~p ~p ~p [going to wait to process_loop]~n", [self(), Module, Name, Arity, Args]),
+  %io:format("~p built_in ~p ~p ~p ~p [going to wait to process_loop]~n", [self(), Module, Name, Arity, Args]),
   Info = process_loop(InfoIn),
-  io:format("~p built_in ~p ~p ~p ~p [stopped waiting on process_loop]~n", [self(), Module, Name, Arity, Args]),
+  %io:format("~p built_in ~p ~p ~p ~p [stopped waiting on process_loop]~n", [self(), Module, Name, Arity, Args]),
   ?debug_flag(?short_builtin, {'built-in', Module, Name, Arity, Location}),
   %% {Stack, ResetInfo} = reset_stack(Info),
   %% ?debug_flag(?stack, {stack, Stack}),
@@ -255,6 +257,21 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
       {{error, Reason}, FinalInfo}
   end.
 
+% One of the problems with how we are instrumenting is that there are ways to get handles
+% to processes that have nothing to do with registration, for instance group_leader. This 
+% function attempts to allow translation for this.
+translate_pid(Pid, Info) ->
+  ?badarg_if_not(is_pid(Pid)),
+  #concuerror_info{processes = Processes, sprocesses = SProcesses} = Info,
+  case ets:lookup(Processes, Pid) of
+      [] -> case ets:lookup(SProcesses, Pid) of
+              [] -> Pid;
+              [{_, NPid}] -> NPid
+            end;
+      _ -> Pid
+  end.
+
+
 %% Special instruction running control (e.g. send to unknown -> wait for reply)
 run_built_in(erlang, demonitor, 2, [Ref, Options], Info) ->
   ?badarg_if_not(is_reference(Ref)),
@@ -287,11 +304,12 @@ run_built_in(erlang, demonitor, 2, [Ref, Options], Info) ->
     true -> {Result, NewInfo};
     false -> {true, NewInfo}
   end;
-run_built_in(erlang, exit, 2, [Pid, Reason],
+run_built_in(erlang, exit, 2, [NPid, Reason],
              #concuerror_info{
                 next_event = #event{event_info = EventInfo} = Event
                } = Info) ->
-  ?badarg_if_not(is_pid(Pid)),
+  ?badarg_if_not(is_pid(NPid)),
+  Pid = translate_pid(NPid, Info),
   case EventInfo of
     %% Replaying...
     #builtin_event{result = OldResult} -> {OldResult, Info};
@@ -314,17 +332,19 @@ run_built_in(erlang, halt, _, _, Info) ->
   NewEvent = Event#event{special = halt},
   {no_return, Info#concuerror_info{next_event = NewEvent}};
 
-run_built_in(erlang, is_process_alive, 1, [Pid], Info) ->
-  ?badarg_if_not(is_pid(Pid)),
+run_built_in(erlang, is_process_alive, 1, [NPid], Info) ->
+  ?badarg_if_not(is_pid(NPid)),
   #concuerror_info{processes = Processes} = Info,
+  Pid = translate_pid(NPid, Info),
   Return =
     case ets:lookup(Processes, Pid) of
-      [] -> erlang:is_process_alive(Pid);
+      [] ->  throw (unknown_process);
       [?process_pat_pid_status(Pid, Status)] -> is_active(Status)
     end,
   {Return, Info};
 
-run_built_in(erlang, link, 1, [Pid], #concuerror_info{links = Links} = Info) ->
+run_built_in(erlang, link, 1, [NPid], #concuerror_info{links = Links} = Info) ->
+  Pid = translate_pid(NPid, Info),
   case run_built_in(erlang, is_process_alive, 1, [Pid], Info) of
     {true, Info}->
       Self = self(),
@@ -344,7 +364,8 @@ run_built_in(erlang, make_ref, 0, [], Info) ->
       undefined -> make_ref()
     end,
   {Ref, Info};
-run_built_in(erlang, monitor, 2, [Type, Pid], Info) ->
+run_built_in(erlang, monitor, 2, [Type, NPid], Info) ->
+  Pid = translate_pid(NPid, Info),
   #concuerror_info{
      monitors = Monitors,
      next_event = #event{event_info = EventInfo} = Event} = Info,
@@ -383,7 +404,8 @@ run_built_in(erlang, monitor, 2, [Type, Pid], Info) ->
         end
     end,
   {Ref, NewInfo};
-run_built_in(erlang, process_info, 2, [Pid, Item], Info) when is_atom(Item) ->
+run_built_in(erlang, process_info, 2, [NPid, Item], Info) when is_atom(Item) ->
+  Pid = translate_pid(NPid, Info),
   TheirInfo =
     case Pid =:= self() of
       true -> Info;
@@ -494,7 +516,7 @@ run_built_in(erlang, send, 3, [Recipient, Message, _Options],
                } = Info) ->
   Pid =
     case is_pid(Recipient) of
-      true -> Recipient;
+      true -> translate_pid(Recipient, Info);
       false ->
         {P, Info} = run_built_in(erlang, whereis, 1, [Recipient], Info),
         P
@@ -529,8 +551,9 @@ run_built_in(erlang, process_flag, 2, [Flag, Value],
          Info#concuerror_info{flags = Flags#process_flags{priority = Value}}}
     end,
   {Result, NewInfo};
-run_built_in(erlang, unlink, 1, [Pid], #concuerror_info{links = Links} = Info) ->
+run_built_in(erlang, unlink, 1, [NPid], #concuerror_info{links = Links} = Info) ->
   Self = self(),
+  Pid = translate_pid(NPid, Info), 
   [true,true] = [ets:delete_object(Links, L) || L <- ?links(Self, Pid)],
   {true, Info};
 run_built_in(erlang, unregister, 1, [Name],
@@ -820,7 +843,7 @@ fold_with_patterns(PatternFun, NewMessages, OldMessages) ->
 %%------------------------------------------------------------------------------
 
 notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
-  io:format("~p notifying ~p ~p~n", [self(), Scheduler, Notification]), 
+  %io:format("~p notifying ~p ~p~n", [self(), Scheduler, Notification]), 
   Scheduler ! Notification,
   Info.
 
@@ -829,12 +852,12 @@ notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
 process_top_loop(#concuerror_info{processes = Processes} = Info, Symbolic) ->
   true = ets:insert(Processes, ?new_process(self(), Symbolic)),
   ?debug_flag(?wait, top_waiting),
-  io:format("~p in process_top_loop waiting for start~n", [self()]),
+  %io:format("~p in process_top_loop waiting for start~n", [self()]),
   receive
     {start, Module, Name, Args} ->
       ?debug_flag(?wait, {start, Module, Name, Args}),
       StartInfo = set_status(Info, running),
-      io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
+      %io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
       %% It is ok for this load to fail
       concuerror_loader:load(Module, Info#concuerror_info.modules),
       put(concuerror_info, StartInfo),
@@ -862,14 +885,14 @@ process_top_loop(#concuerror_info{processes = Processes} = Info, Symbolic) ->
 
 process_loop(Info) ->
   ?debug_flag(?wait, waiting),
-  io:format("~p in process_loop now~n", [self()]),
+  %io:format("~p in process_loop now~n", [self()]),
   receive
     #event{event_info = EventInfo} = Event ->
-      io:format("~p in process_loop now, received event ~p~n", [self(), Event]),
+      %io:format("~p in process_loop now, received event ~p~n", [self(), Event]),
       Status = Info#concuerror_info.status,
       case Status =:= exited of
         true ->
-          io:format("~p in process_loop now, notifying exit~n"),
+          %io:format("~p in process_loop now, notifying exit~n", [self()]),
           process_loop(notify(exited, Info));
         false ->
           NewInfo = Info#concuerror_info{next_event = Event},
@@ -920,12 +943,12 @@ process_loop(Info) ->
           process_loop(Info)
       end;
     {message, Message} ->
-      io:format("~p in process_loop now, received message ~p~n", [self(), Message]),
+      %io:format("~p in process_loop now, received message ~p~n", [self(), Message]),
       ?debug_flag(?wait, {waiting, got_message}),
       Scheduler = Info#concuerror_info.scheduler,
       Trapping = Info#concuerror_info.flags#process_flags.trap_exit,
       Scheduler ! {trapping, Trapping},
-      io:format("~p in process_loop now, told scheduler (~p) {trapping, ~p}~n", [self(), Scheduler, Trapping]),
+      %io:format("~p in process_loop now, told scheduler (~p) {trapping, ~p}~n", [self(), Scheduler, Trapping]),
       case is_active(Info) of
         true ->
           ?debug_flag(?receive_, {message_enqueued, Message}),
@@ -1113,10 +1136,10 @@ system_ets_entries(EtsTables) ->
   Map = fun(Tid) -> ?new_system_ets_table(Tid, ets:info(Tid, protection)) end,
   ets:insert(EtsTables, [Map(Tid) || Tid <- ets:all(), is_atom(Tid)]).
 
-system_processes_wrappers(Processes) ->
+system_processes_wrappers(Processes, SProcesses) ->
   Scheduler = self(),
   GroupLeaders = [{Me, erlang:whereis(Me)} || Me <- registered()],
-  io:format("Group leader information ~p~n~n", [GroupLeaders]),
+  %io:format("Group leader information ~p~n~n", [GroupLeaders]),
   Map =
     fun(Name) ->
         Fun = fun() -> system_wrapper_loop(Name, whereis(Name), Scheduler) end,
@@ -1124,7 +1147,8 @@ system_processes_wrappers(Processes) ->
         {whereis(Name), {Pid, Name}}
     end,
   SystemProcesses = [Map(Name) || Name <- registered()],
-  ets:insert(Processes, [?new_system_process(Pid, Name) || {_, {Pid, Name}} <- SystemProcesses]).
+  ets:insert(Processes, [?new_system_process(Pid, Name) || {_, {Pid, Name}} <- SystemProcesses]),
+  ets:insert(SProcesses, [{OldPid, NewPid} || {OldPid, {NewPid, _}} <- SystemProcesses]). 
 
 system_wrapper_loop(Name, Wrapped, Scheduler) ->
   receive
@@ -1160,6 +1184,7 @@ init_concuerror_info(Info) ->
      modules = Modules,
      monitors = Monitors,
      processes = Processes,
+     sprocesses = SProcesses,
      scheduler = Scheduler
     } = Info,
   #concuerror_info{
@@ -1170,6 +1195,7 @@ init_concuerror_info(Info) ->
      modules = Modules,
      monitors = Monitors,
      processes = Processes,
+     sprocesses = SProcesses,
      scheduler = Scheduler
     }.
 

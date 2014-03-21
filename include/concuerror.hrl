@@ -283,3 +283,6 @@
                     {internal_name2native, 1}
                    ]]
        ).
+
+-define(DO_NOT_INSTRUMENT,
+       [io]).

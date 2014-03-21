@@ -43,7 +43,11 @@ load_binary(Module, Filename, Beam, Instrumented) ->
   InstrumentedCore =
     case Module =:= concuerror_inspect of
       true -> Core;
-      false -> concuerror_instrumenter:instrument(Core, Instrumented)
+      false -> case lists:member(Module, ?DO_NOT_INSTRUMENT) of
+                 true -> io:format("Skipping instrumentation for module ~p~n", [Module]), 
+                       Core;
+                 false -> concuerror_instrumenter:instrument(Core, Instrumented)
+               end
     end,
   {ok, _, NewBinary} =
     compile:forms(InstrumentedCore, [from_core, report_errors, binary]),

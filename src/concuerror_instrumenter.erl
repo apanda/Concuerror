@@ -19,6 +19,7 @@
 -spec instrument(cerl:cerl(), ets:tid()) -> cerl:cerl().
 
 instrument(CoreCode, Instrumented) ->
+  %io:format("~p instrumenting~n", [self()]),
   ?if_debug(Stripper = fun(Tree) -> cerl:set_ann(Tree, []) end),
   ?debug_flag(?input, "~s\n",
               [cerl_prettypr:format(cerl_trees:map(Stripper, CoreCode))]),
@@ -127,6 +128,8 @@ is_safe(Module, Name, Arity, Instrumented) ->
           ) orelse %% The rest are defined in concuerror.hrl
             lists:member({ModuleLit, NameLit, Arity}, ?RACE_FREE_BIFS);
         false ->
-          ets:lookup(Instrumented, ModuleLit) =/= []
+          (%list:member({ModuleLit, NameLit, Arity}, ?RACE_FREE_NOBIFS)
+           %orelse
+            ets:lookup(Instrumented, ModuleLit) =/= [])
       end
   end.
