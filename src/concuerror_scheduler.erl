@@ -776,7 +776,9 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   #event{event_info = EventInfo} = Event,
   #message_event{message = Message, type = Type} = EventInfo,
   %% Message delivery always succeeds
+  %% This just makes sure there are no messages waiting in the queue right now.
   assert_no_messages(),
+  io:format("~p sending {~p, ~p} to ~p~n", [self(), Type, Message, Recipient]),
   Recipient ! {Type, Message},
   UpdatedEvent =
     receive
@@ -813,11 +815,13 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   {ok, UpdatedEvent};
 get_next_event_backend(#event{actor = Pid} = Event, State) when is_pid(Pid) ->
   assert_no_messages(),
+  io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
   Pid ! Event,
   get_next_event_backend_loop(Event, State).
 
 get_next_event_backend_loop(Trigger, State) ->
   #scheduler_state{wait = Wait} = State,
+  io:format("~p waiting~n", [self()]),
   receive
     exited -> exited;
     {blocked, _} -> retry;

@@ -216,7 +216,9 @@ built_in(erlang, get, _Arity, Args, _Location, Info) ->
   {{didit, erlang:apply(erlang,get,Args)}, Info};
 %% XXX: Check if its redundant (e.g. link to already linked)
 built_in(Module, Name, Arity, Args, Location, InfoIn) ->
+  io:format("~p built_in ~p ~p ~p ~p [going to wait to process_loop]~n", [self(), Module, Name, Arity, Args]),
   Info = process_loop(InfoIn),
+  io:format("~p built_in ~p ~p ~p ~p [stopped waiting on process_loop]~n", [self(), Module, Name, Arity, Args]),
   ?debug_flag(?short_builtin, {'built-in', Module, Name, Arity, Location}),
   %% {Stack, ResetInfo} = reset_stack(Info),
   %% ?debug_flag(?stack, {stack, Stack}),
@@ -818,6 +820,7 @@ fold_with_patterns(PatternFun, NewMessages, OldMessages) ->
 %%------------------------------------------------------------------------------
 
 notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
+  io:format("~p notifying ~p ~p~n", [self(), Scheduler, Notification]), 
   Scheduler ! Notification,
   Info.
 
@@ -826,10 +829,12 @@ notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
 process_top_loop(#concuerror_info{processes = Processes} = Info, Symbolic) ->
   true = ets:insert(Processes, ?new_process(self(), Symbolic)),
   ?debug_flag(?wait, top_waiting),
+  io:format("~p in process_top_loop waiting for start~n", [self()]),
   receive
     {start, Module, Name, Args} ->
       ?debug_flag(?wait, {start, Module, Name, Args}),
       StartInfo = set_status(Info, running),
+      io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
       %% It is ok for this load to fail
       concuerror_loader:load(Module, Info#concuerror_info.modules),
       put(concuerror_info, StartInfo),
@@ -857,11 +862,14 @@ process_top_loop(#concuerror_info{processes = Processes} = Info, Symbolic) ->
 
 process_loop(Info) ->
   ?debug_flag(?wait, waiting),
+  io:format("~p in process_loop now~n", [self()]),
   receive
     #event{event_info = EventInfo} = Event ->
+      io:format("~p in process_loop now, received event ~p~n", [self(), Event]),
       Status = Info#concuerror_info.status,
       case Status =:= exited of
         true ->
+          io:format("~p in process_loop now, notifying exit~n"),
           process_loop(notify(exited, Info));
         false ->
           NewInfo = Info#concuerror_info{next_event = Event},
@@ -912,10 +920,12 @@ process_loop(Info) ->
           process_loop(Info)
       end;
     {message, Message} ->
+      io:format("~p in process_loop now, received message ~p~n", [self(), Message]),
       ?debug_flag(?wait, {waiting, got_message}),
       Scheduler = Info#concuerror_info.scheduler,
       Trapping = Info#concuerror_info.flags#process_flags.trap_exit,
       Scheduler ! {trapping, Trapping},
+      io:format("~p in process_loop now, told scheduler (~p) {trapping, ~p}~n", [self(), Scheduler, Trapping]),
       case is_active(Info) of
         true ->
           ?debug_flag(?receive_, {message_enqueued, Message}),
@@ -1105,9 +1115,8 @@ system_ets_entries(EtsTables) ->
 
 system_processes_wrappers(Processes) ->
   Scheduler = self(),
-  GroupLeaders = group_leaders(),
+  GroupLeaders = [{Me, erlang:whereis(Me)} || Me <- registered()],
   io:format("Group leader information ~p~n~n", [GroupLeaders]),
-  %io:format("Group        information ~p~n", [group_mapping()]),
   Map =
     fun(Name) ->
         Fun = fun() -> system_wrapper_loop(Name, whereis(Name), Scheduler) end,
@@ -1115,36 +1124,7 @@ system_processes_wrappers(Processes) ->
         {whereis(Name), {Pid, Name}}
     end,
   SystemProcesses = [Map(Name) || Name <- registered()],
-  io:format("SystemProcesses are ~p~n~n", [SystemProcesses]),
-  correct_group_leaders(GroupLeaders, SystemProcesses),
-  io:format("Group leader information ~p~n~n", [group_leaders()]),
   ets:insert(Processes, [?new_system_process(Pid, Name) || {_, {Pid, Name}} <- SystemProcesses]).
-
-group_leaders() ->
-  [{Me, proplists:get_value(group_leader, erlang:process_info(Me))} || Me <- processes()].
-%group_mapping() ->
-  %[{whereis(Me), Me} || Me <- registered()].
-%group_leader_info(Leaders) ->
-  %[erlang:process_info(Leader) || {_, Leader} <- Leaders].
-
-correct_group_leaders(GroupLeaders, SystemProcesses) ->
-  Self = self(),
-  case GroupLeaders of
-    [{Self,_}|Rest] ->
-      correct_group_leaders(Rest, SystemProcesses);
-    [{Pid, Leader}|Rest] ->
-      Prop = proplists:get_value(Leader, SystemProcesses),
-      true = case Prop of
-        undefined -> true;
-        {ModLeader, _} ->
-           io:format("~p: Trying to set group leader for ~p~n", [self(), Pid]),
-           Res = erlang:group_leader(ModLeader, Pid),
-           io:format("Done result is ~p~n", [Res]),
-           Res
-      end,
-      correct_group_leaders(Rest, SystemProcesses);
-    [] -> ok
-  end.
 
 system_wrapper_loop(Name, Wrapped, Scheduler) ->
   receive
