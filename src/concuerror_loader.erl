@@ -17,7 +17,7 @@
 -include("concuerror.hrl").
 
 -spec load(module(), ets:tid()) -> 'ok'.
-
+% Instrumented in this case is the ets table hitherto referred to as Modules
 load(Module, Instrumented) ->
   case ets:lookup(Instrumented, Module) =/= [] of
     true -> ok;
@@ -46,7 +46,8 @@ load_binary(Module, Filename, Beam, Instrumented) ->
       false -> case lists:member(Module, ?DO_NOT_INSTRUMENT) of
                  true -> io:format("Skipping instrumentation for module ~p~n", [Module]), 
                        Core;
-                 false -> concuerror_instrumenter:instrument(Core, Instrumented)
+                 false -> io:format("Actually instrumenting module ~p~n", [Module]),
+                       concuerror_instrumenter:instrument(Core, Instrumented)
                end
     end,
   {ok, _, NewBinary} =

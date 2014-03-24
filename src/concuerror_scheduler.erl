@@ -161,7 +161,7 @@ log_trace(State) ->
       true -> none;
       false ->
         #scheduler_state{trace = Trace} = State,
-        %%io:format("~p~n",[Trace]),
+        %io:format("~p~n",[Trace]),
         Fold =
           fun(#trace_state{done = [A|_], index = I}, Acc) -> [{I, A}|Acc] end,
         TraceInfo = lists:foldl(Fold, [], Trace),
@@ -780,7 +780,7 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   %% Message delivery always succeeds
   %% This just makes sure there are no messages waiting in the queue right now.
   assert_no_messages(),
-  %io:format("~p sending {~p, ~p} to ~p~n", [self(), Type, Message, Recipient]),
+  io:format("~p sending {~p, ~p} to ~p~n", [self(), Type, Message, Recipient]),
   Recipient ! {Type, Message},
   UpdatedEvent =
     receive
@@ -817,13 +817,13 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   {ok, UpdatedEvent};
 get_next_event_backend(#event{actor = Pid} = Event, State) when is_pid(Pid) ->
   assert_no_messages(),
-  %io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
+  io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
   Pid ! Event,
   get_next_event_backend_loop(Event, State).
 
 get_next_event_backend_loop(Trigger, State) ->
   #scheduler_state{wait = Wait} = State,
-  %io:format("~p waiting~n", [self()]),
+  io:format("~p waiting~n", [self()]),
   receive
     exited -> exited;
     {blocked, _} -> retry;

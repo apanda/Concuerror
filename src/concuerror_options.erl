@@ -53,6 +53,8 @@ options() ->
     "The module containing the main test function."}
   ,{test, [frontend], $t, "test", {atom, test},
     "The name of the 0-arity function that starts the test."}
+  ,{otp, [process, scheduler], undefined, "otp", {atom, undefined},
+     "Check an OTP application"}
   ,{output, [logger], $o, "output", {string, "results.txt"},
     "Output file."}
   ,{symbolic, [logger], $s, "symbolic", {boolean, false},
@@ -92,7 +94,8 @@ options() ->
   ,{target, [logger, scheduler]} %% Generated from module and test or given explicitlyq
   ,{quit, []}                    %% Controlling whether a halt will happen
   ,{files, [logger]}             %% List of included files (to be shown in the log)
-  ,{modules, [logger, process]}  %% List of included files (to be shown in the log)
+  ,{modules, [logger, process]}  %% List of modules (to be shown in the log)
+  ,{applications, [process, scheduler]} %% List of applications
   ].
 
 -spec filter_options(atom(), {atom(), term()}) -> boolean().
@@ -108,6 +111,14 @@ cl_version() ->
   io:format(standard_error, "Concuerror v~s~n",[?VSN]),
   ok.
 
+
+finalizeOtp(Acc) ->
+  Value = proplists:get_value(otp, Acc),
+  case Value of
+    undefined -> ok;
+    Module ->concuerror_application:start_application(Module, Acc)
+  end.
+
 finalize(Options) ->
   Modules = [{modules, ets:new(modules, [public])}],
   Finalized = finalize(lists:reverse(proplists:unfold(Options),Modules), []),
@@ -118,7 +129,9 @@ finalize(Options) ->
                 " specified.")
   end.
 
-finalize([], Acc) -> Acc;
+finalize([], Acc) -> 
+    finalizeOtp(Acc), 
+    Acc;
 finalize([{quiet, true}|Rest], Acc) ->
   NewRest = proplists:delete(verbose, proplists:delete(quiet, Rest)),
   finalize(NewRest, [{verbose, 0}|Acc]);
@@ -142,6 +155,7 @@ finalize([{Key, Value}|Rest], Acc)
       NewRest = proplists:delete(file, Rest),
       finalize(NewRest, [{files, LoadedFiles}|Acc]);
     Else ->
+      io:format("Adding path ~p~n", [Value]),
       PathAdd =
         case Else of
           patha -> fun code:add_patha/1;

@@ -18,6 +18,7 @@
                    Location :: term()) -> Return :: term().
 
 instrumented(Tag, Args, Location) ->
+  %io:format("Instrumented call ~p ~p ~p~n", [Tag, Args, Location]),
   Ret =
     case erase(concuerror_info) of
       undefined -> doit;

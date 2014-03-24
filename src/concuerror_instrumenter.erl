@@ -79,6 +79,7 @@ mapfold(Tree, {Instrumented, Var}) ->
   {NewTree, {Instrumented, NewVar}}.
 
 inspect(Tag, Args, Tree) ->
+  io:format("Inspecting: ~p ~p ~p~n", [Tag, Args, Tree]),
   CTag = cerl:c_atom(Tag),
   CArgs = cerl:make_list(Args),
   cerl:update_tree(Tree, call,

@@ -46,7 +46,8 @@ MODULES = \
 	concuerror_logger \
 	concuerror_options \
 	concuerror_printer \
-	concuerror_scheduler
+	concuerror_scheduler \
+	concuerror_application
 
 vpath %.erl src
 
