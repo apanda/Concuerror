@@ -38,7 +38,7 @@
 %% -define(DEBUG, true).
 -define(DEBUG_FLAGS, lists:foldl(fun erlang:'bor'/2, 0, ?ACTIVE_FLAGS)).
 
--define(badarg_if_not(A), case A of true -> ok; false -> error(badarg) end).                              
+-define(badarg_if_not(A), case A of true -> ok; false -> error(badarg) end).
 %%------------------------------------------------------------------------------
 
 -include("concuerror.hrl").
@@ -63,7 +63,9 @@
           monitors                   :: monitors(),
           next_event = none          :: 'none' | event(),
           processes                  :: processes(),
-          sprocesses           :: processes(),
+          sprocesses                 :: processes(),
+          otp_application            :: atom(),
+          otp_processes              :: atom(),
           scheduler                  :: pid(),
           stacktop = 'none'          :: 'none' | tuple(),
           status = exited            :: 'exited'| 'exiting' | 'running' | 'waiting'
@@ -73,21 +75,21 @@
 
 %%------------------------------------------------------------------------------
 
-runOtp(Acc) ->
+runOtp(#concuerror_info{otp_application = Module, otp_processes = _OtpProcesses, processes = Processes}) ->
   io:format("Launching OTP applications~n"),
-  Value = proplists:get_value(otp, Acc),
-  case Value of
+  case Module of
     undefined -> ok;
-    Module ->concuerror_application:start_application(Module, Acc)
+    Module ->concuerror_application:start_application(Module, Processes)
   end.
 
 
 -spec spawn_first_process(options()) -> pid().
 
 spawn_first_process(Options) ->
-  [AfterTimeout, Logger, Processes, SProcesses, Modules] =
-    get_properties(['after-timeout', logger, processes, sprocesses, modules], Options),
+  [AfterTimeout, Logger, Processes, SProcesses, Modules, Otp] =
+    get_properties(['after-timeout', logger, processes, sprocesses, modules, otp], Options),
   EtsTables = ets:new(ets_tables, [public]),
+  OtpProcesses = ets:new(otp_processes, [public]),
   InitialInfo =
     #concuerror_info{
        'after-timeout' = AfterTimeout,
@@ -98,11 +100,13 @@ spawn_first_process(Options) ->
        monitors        = ets:new(monitors, [bag, public]),
        processes       = Processes,
        sprocesses      = SProcesses,
+       otp_application = Otp,
+       otp_processes   = OtpProcesses,
        scheduler       = self()
       },
   system_ets_entries(EtsTables),
   system_processes_wrappers(Processes, SProcesses),
-  runOtp(Options),
+  runOtp(InitialInfo),
   spawn_link(fun() -> process_top_loop(InitialInfo, "P") end).
 
 get_properties(Props, PropList) ->
@@ -148,7 +152,7 @@ instrumented(call, [Module, Name, Args], Location, Info) ->
   Arity = length(Args),
   instrumented_aux(Module, Name, Arity, Args, Location, Info);
 instrumented(apply, [Fun, Args], Location, Info) ->
-  io:format("~p apply: ~p ~p~n", [self(), Fun, Location]), 
+  io:format("~p apply: ~p ~p~n", [self(), Fun, Location]),
   case is_function(Fun) of
     true ->
       Module = get_fun_info(Fun, module),
@@ -269,7 +273,7 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
   end.
 
 % One of the problems with how we are instrumenting is that there are ways to get handles
-% to processes that have nothing to do with registration, for instance group_leader. This 
+% to system processes that are not accessed by name, for instance through group_leader(). This
 % function attempts to allow translation for this.
 translate_pid(Pid, Info) ->
   ?badarg_if_not(is_pid(Pid)),
@@ -565,7 +569,7 @@ run_built_in(erlang, process_flag, 2, [Flag, Value],
   {Result, NewInfo};
 run_built_in(erlang, unlink, 1, [NPid], #concuerror_info{links = Links} = Info) ->
   Self = self(),
-  Pid = translate_pid(NPid, Info), 
+  Pid = translate_pid(NPid, Info),
   [true,true] = [ets:delete_object(Links, L) || L <- ?links(Self, Pid)],
   {true, Info};
 run_built_in(erlang, unregister, 1, [Name],
@@ -816,7 +820,7 @@ update_messages(Result, NewOldMessages, Info) ->
       Info#concuerror_info{
         messages_new = NewOldMessages,
         messages_old = queue:new()}
-  end.      
+  end.
 
 has_matching_or_after(PatternFun, Timeout, Info) ->
   #concuerror_info{messages_new = NewMessages,
@@ -855,7 +859,7 @@ fold_with_patterns(PatternFun, NewMessages, OldMessages) ->
 %%------------------------------------------------------------------------------
 
 notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
-  io:format("~p notifying ~p ~p~n", [self(), Scheduler, Notification]), 
+  io:format("~p notifying ~p ~p~n", [self(), Scheduler, Notification]),
   Scheduler ! Notification,
   Info.
 
@@ -1160,7 +1164,7 @@ system_processes_wrappers(Processes, SProcesses) ->
     end,
   SystemProcesses = [Map(Name) || Name <- registered()],
   ets:insert(Processes, [?new_system_process(Pid, Name) || {_, {Pid, Name}} <- SystemProcesses]),
-  ets:insert(SProcesses, [{OldPid, NewPid} || {OldPid, {NewPid, _}} <- SystemProcesses]). 
+  ets:insert(SProcesses, [{OldPid, NewPid} || {OldPid, {NewPid, _}} <- SystemProcesses]).
 
 system_wrapper_loop(Name, Wrapped, Scheduler) ->
   receive

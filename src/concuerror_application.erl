@@ -14,13 +14,14 @@
 % - Sadness
 
 % If no OTP application to start, do nothing.
-%-spec start_application(atom(), options()) -> ok. 
+-spec start_application(atom(), processes()) -> ok. 
+
 start_application(undefined, _) ->
   ok;
 
 
 % If there is an OTP application to start.
-start_application(ApplicationName, ConcuerrorOptions) ->
+start_application(ApplicationName, Instrumented) ->
   %io:format("Called to start application ~p~n", [ApplicationName]),
   % First find the app file.
   case code:where_is_file(atom_to_list(ApplicationName) ++ ".app") of
@@ -36,13 +37,15 @@ start_application(ApplicationName, ConcuerrorOptions) ->
           Modules = proplists:get_value(modules, OptList),
           Applications = proplists:get_value(applications, OptList),
           % Load dependencies
-          load_other_apps(Applications, ConcuerrorOptions),
+          load_other_apps(Applications, Instrumented),
           % Compile and load modules for the current application
-          compile_modules(Modules, ConcuerrorOptions),
+          compile_modules(Modules, Instrumented),
           % Load the application
+          io:format("[concuerror_application]: Before starting application~p: ~p~n", [Name, registered()]),
           application:load(AppDescr),
           % Start the application
-          application:start(ApplicationName);
+          application:start(ApplicationName),
+          io:format("[concuerror_application]: After starting application~p: ~p~n", [Name, registered()]);
           %io:format("Started thus far: ~p~n", [application:loaded_applications()]);
        {error, Reason} ->
           io:format("Error reading application file ~p~n", [Reason])
@@ -51,19 +54,18 @@ start_application(ApplicationName, ConcuerrorOptions) ->
   ok.
 
 % Load dependencies. This will not handle circular dependencies but hope
-load_other_apps([], _ConcuerrorOptions) ->
+load_other_apps([], _Instrumented) ->
   ok;
-load_other_apps([App|Rest], ConcuerrorOptions) ->
+load_other_apps([App|Rest], Instrumented) ->
   LoadedApps = [Name || {Name, _, _} <- application:loaded_applications()],
   ok = case lists:member(App, LoadedApps) of
     true -> ok;
-    _ -> start_application(App, ConcuerrorOptions)
+    _ -> start_application(App, Instrumented)
   end,
-  load_other_apps(Rest, ConcuerrorOptions).
+  load_other_apps(Rest, Instrumented).
 
 % Go about compiling these modules
-compile_modules(Modules, ConcuerrorOptions) ->
-  Instrumented = proplists:get_value(modules, ConcuerrorOptions),
+compile_modules(Modules, Instrumented) ->
   [compile_module(Module, Instrumented) || Module <- Modules],
   ok.
 
