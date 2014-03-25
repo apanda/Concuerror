@@ -39,6 +39,7 @@ load(Module, Instrumented) ->
 
 load_binary(Module, Filename, Beam, Instrumented) ->
   ets:insert(Instrumented, {Module}),
+  io:format("Asked to instrument ~p~n", [Module]),
   Core = get_core(Beam),
   InstrumentedCore =
     case Module =:= concuerror_inspect of

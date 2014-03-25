@@ -73,6 +73,15 @@
 
 %%------------------------------------------------------------------------------
 
+runOtp(Acc) ->
+  io:format("Launching OTP applications~n"),
+  Value = proplists:get_value(otp, Acc),
+  case Value of
+    undefined -> ok;
+    Module ->concuerror_application:start_application(Module, Acc)
+  end.
+
+
 -spec spawn_first_process(options()) -> pid().
 
 spawn_first_process(Options) ->
@@ -93,6 +102,7 @@ spawn_first_process(Options) ->
       },
   system_ets_entries(EtsTables),
   system_processes_wrappers(Processes, SProcesses),
+  runOtp(Options),
   spawn_link(fun() -> process_top_loop(InitialInfo, "P") end).
 
 get_properties(Props, PropList) ->
@@ -138,6 +148,7 @@ instrumented(call, [Module, Name, Args], Location, Info) ->
   Arity = length(Args),
   instrumented_aux(Module, Name, Arity, Args, Location, Info);
 instrumented(apply, [Fun, Args], Location, Info) ->
+  io:format("~p apply: ~p ~p~n", [self(), Fun, Location]), 
   case is_function(Fun) of
     true ->
       Module = get_fun_info(Fun, module),

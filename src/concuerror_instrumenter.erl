@@ -79,13 +79,15 @@ mapfold(Tree, {Instrumented, Var}) ->
   {NewTree, {Instrumented, NewVar}}.
 
 inspect(Tag, Args, Tree) ->
-  io:format("Inspecting: ~p ~p ~p~n", [Tag, Args, Tree]),
+  %io:format("Inspecting: ~p ~p ~p~n", [Tag, Args, Tree]),
   CTag = cerl:c_atom(Tag),
   CArgs = cerl:make_list(Args),
-  cerl:update_tree(Tree, call,
+  NewTree = cerl:update_tree(Tree, call,
                    [[cerl:c_atom(?inspect)],
                     [cerl:c_atom(instrumented)],
-                    [CTag, CArgs, cerl:abstract(cerl:get_ann(Tree))]]).
+                    [CTag, CArgs, cerl:abstract(cerl:get_ann(Tree))]]),
+  %io:format("Transformed: ~p ~p ~p~n", [Tag, Args, NewTree]),
+  NewTree.
 
 receive_matching_fun(Tree) ->
   Msg = cerl:c_var(message),

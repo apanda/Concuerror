@@ -112,13 +112,6 @@ cl_version() ->
   ok.
 
 
-finalizeOtp(Acc) ->
-  Value = proplists:get_value(otp, Acc),
-  case Value of
-    undefined -> ok;
-    Module ->concuerror_application:start_application(Module, Acc)
-  end.
-
 finalize(Options) ->
   Modules = [{modules, ets:new(modules, [public])}],
   Finalized = finalize(lists:reverse(proplists:unfold(Options),Modules), []),
@@ -130,7 +123,6 @@ finalize(Options) ->
   end.
 
 finalize([], Acc) -> 
-    finalizeOtp(Acc), 
     Acc;
 finalize([{quiet, true}|Rest], Acc) ->
   NewRest = proplists:delete(verbose, proplists:delete(quiet, Rest)),

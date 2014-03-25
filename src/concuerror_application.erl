@@ -25,10 +25,9 @@ start_application(ApplicationName, ConcuerrorOptions) ->
   % First find the app file.
   case code:where_is_file(atom_to_list(ApplicationName) ++ ".app") of
     non_existing ->
-      %io:format("Application file not found"),
+      io:format("Application file not found"),
       throw(opt_error);
     Name ->
-      %io:format("Opening file ~p~n", [Name]),
       % Convert it to an Erlang list structure
       case prim_consult(Name) of
        {ok, AppDescr} ->
@@ -36,9 +35,13 @@ start_application(ApplicationName, ConcuerrorOptions) ->
           [{application, ApplicationName, OptList}] = AppDescr, 
           Modules = proplists:get_value(modules, OptList),
           Applications = proplists:get_value(applications, OptList),
+          % Load dependencies
           load_other_apps(Applications, ConcuerrorOptions),
+          % Compile and load modules for the current application
           compile_modules(Modules, ConcuerrorOptions),
+          % Load the application
           application:load(AppDescr),
+          % Start the application
           application:start(ApplicationName);
           %io:format("Started thus far: ~p~n", [application:loaded_applications()]);
        {error, Reason} ->
@@ -47,6 +50,7 @@ start_application(ApplicationName, ConcuerrorOptions) ->
   end,
   ok.
 
+% Load dependencies. This will not handle circular dependencies but hope
 load_other_apps([], _ConcuerrorOptions) ->
   ok;
 load_other_apps([App|Rest], ConcuerrorOptions) ->
