@@ -80,8 +80,10 @@
 
 -define(TICKER_TIMEOUT, 500).
 %%------------------------------------------------------------------------------
+-define(crash(Reason), exit({?MODULE, Reason})).
+%%------------------------------------------------------------------------------
 %% Scheduler's timeout
--define(MINIMUM_TIMEOUT, 500).
+-define(MINIMUM_TIMEOUT, 1000).
 %%------------------------------------------------------------------------------
 -type message_info() :: ets:tid().
 
@@ -157,6 +159,7 @@
 -record(builtin_event, {
           actor = self()   :: pid(),
           extra            :: term(),
+          exiting = false  :: boolean(),
           mfa              :: mfargs(),
           result           :: term(),
           status = ok      :: 'ok' | {'crashed', term()} | 'unknown',
@@ -243,6 +246,7 @@
                  {dt_spread_tag, 1},
                  {dt_restore_tag,1},
                  {error, 1},
+                 {error, 2},
                  {exit, 1},
                  {float_to_list, 1},
                  {function_exported, 3},

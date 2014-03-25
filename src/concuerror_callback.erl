@@ -9,7 +9,7 @@
 -export([spawn_first_process/1, start_first_process/2]).
 
 %% Interface for resetting:
--export([process_top_loop/2]).
+-export([process_top_loop/1]).
 
 %%------------------------------------------------------------------------------
 
@@ -50,6 +50,7 @@
 
 -record(concuerror_info, {
           'after-timeout'            :: infinite | integer(),
+          caught_signal = false      :: boolean(),
           escaped_pdict = []         :: term(),
           ets_tables                 :: ets_tables(),
           exit_reason = normal       :: term(),
@@ -68,7 +69,7 @@
           otp_processes              :: atom(),
           scheduler                  :: pid(),
           stacktop = 'none'          :: 'none' | tuple(),
-          status = exited            :: 'exited'| 'exiting' | 'running' | 'waiting'
+          status = running           :: 'exited'| 'exiting' | 'running' | 'waiting'
          }).
 
 -type concuerror_info() :: #concuerror_info{}.
@@ -107,7 +108,9 @@ spawn_first_process(Options) ->
   system_ets_entries(EtsTables),
   system_processes_wrappers(Processes, SProcesses),
   runOtp(InitialInfo),
-  spawn_link(fun() -> process_top_loop(InitialInfo, "P") end).
+  P = spawn_link(fun() -> process_top_loop(InitialInfo) end),
+  true = ets:insert(Processes, ?new_process(P, "P")),
+  P.
 
 get_properties(Props, PropList) ->
   get_properties(Props, PropList, []).
@@ -248,7 +251,12 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
     ?debug_flag(?args, {args, Args}),
     ?debug_flag(?result, {args, Value}),
     EventInfo =
-      #builtin_event{extra = Extra, mfa = {Module, Name, Args}, result = Value},
+      #builtin_event{
+         exiting = Location =:= exit,
+         extra = Extra,
+         mfa = {Module, Name, Args},
+         result = Value
+        },
     Notification = Event#event{event_info = EventInfo},
     NewInfo = notify(Notification, UpdatedInfo),
     {{didit, Value}, NewInfo}
@@ -288,6 +296,8 @@ translate_pid(Pid, Info) ->
 
 
 %% Special instruction running control (e.g. send to unknown -> wait for reply)
+run_built_in(erlang, demonitor, 1, [Ref], Info) ->
+  run_built_in(erlang, demonitor, 2, [Ref, []], Info);
 run_built_in(erlang, demonitor, 2, [Ref, Options], Info) ->
   ?badarg_if_not(is_reference(Ref)),
   #concuerror_info{monitors = Monitors} = Info,
@@ -358,15 +368,40 @@ run_built_in(erlang, is_process_alive, 1, [NPid], Info) ->
     end,
   {Return, Info};
 
-run_built_in(erlang, link, 1, [NPid], #concuerror_info{links = Links} = Info) ->
+run_built_in(erlang, link, 1, [NPid], Info) ->
   Pid = translate_pid(NPid, Info),
+  #concuerror_info{
+     flags = #process_flags{trap_exit = TrapExit},
+     links = Links,
+     next_event = #event{event_info = EventInfo} = Event} = Info,
   case run_built_in(erlang, is_process_alive, 1, [Pid], Info) of
     {true, Info}->
       Self = self(),
       true = ets:insert(Links, ?links(Self, Pid)),
       {true, Info};
     {false, _} ->
-      error(noproc)
+      case TrapExit of
+        false -> error(noproc);
+        true ->
+          NewInfo =
+            case EventInfo of
+              %% Replaying...
+              #builtin_event{} -> Info;
+              %% New event...
+              undefined ->
+                Message =
+                  #message{data = {'EXIT', Pid, noproc},
+                           message_id = make_ref()},
+                MessageEvent =
+                  #message_event{
+                     cause_label = Event#event.label,
+                     message = Message,
+                     recipient = self()},
+                NewEvent = Event#event{special = {message, MessageEvent}},
+                Info#concuerror_info{next_event = NewEvent}
+            end,
+          {true, NewInfo}
+      end
   end;
 
 run_built_in(erlang, make_ref, 0, [], Info) ->
@@ -498,7 +533,8 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
         ParentSymbol = ets:lookup_element(Processes, Parent, ?process_symbolic),
         ChildId = ets:update_counter(Processes, Parent, {?process_children, 1}),
         ChildSymbol = io_lib:format("~s.~w",[ParentSymbol, ChildId]),
-        P = spawn_link(fun() -> process_top_loop(PassedInfo, ChildSymbol) end),
+        P = spawn_link(fun() -> process_top_loop(PassedInfo) end),
+        true = ets:insert(Processes, ?new_process(P, ChildSymbol)),
         NewResult =
           case lists:member(monitor, SpawnOpts) of
             true -> {P, make_ref()};
@@ -863,20 +899,18 @@ notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
   Scheduler ! Notification,
   Info.
 
--spec process_top_loop(concuerror_info(), string()) -> no_return().
+-spec process_top_loop(concuerror_info()) -> no_return().
 
-process_top_loop(#concuerror_info{processes = Processes} = Info, Symbolic) ->
-  true = ets:insert(Processes, ?new_process(self(), Symbolic)),
+process_top_loop(Info) ->
   ?debug_flag(?wait, top_waiting),
   io:format("~p in process_top_loop waiting for start~n", [self()]),
   receive
     {start, Module, Name, Args} ->
       ?debug_flag(?wait, {start, Module, Name, Args}),
-      StartInfo = set_status(Info, running),
       io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
       %% It is ok for this load to fail
       concuerror_loader:load(Module, Info#concuerror_info.modules),
-      put(concuerror_info, StartInfo),
+      put(concuerror_info, Info),
       try
         erlang:apply(Module, Name, Args),
         exit(normal)
@@ -924,18 +958,13 @@ process_loop(Info) ->
     {exit_signal, #message{data = {'EXIT', _From, Reason}} = Message} ->
       Scheduler = Info#concuerror_info.scheduler,
       Trapping = Info#concuerror_info.flags#process_flags.trap_exit,
-      case is_active(Info) of
+      case is_active(Info) andalso not Info#concuerror_info.caught_signal of
         true ->
-          %% XXX: Verify that this is the correct behaviour
-          %% NewInfo =
-          %%   Info#concuerror_info{
-          %%     links = ordsets:del_element(From, Info#concuerror_info.links)
-          %%    },
           case Reason =:= kill of
             true ->
               ?debug_flag(?wait, {waiting, kill_signal}),
               Scheduler ! {trapping, Trapping},
-              exiting(killed, [], Info);
+              exiting(killed, [], Info#concuerror_info{caught_signal = true});
             false ->
               case Trapping of
                 true ->
@@ -950,7 +979,7 @@ process_loop(Info) ->
                       process_loop(Info);
                     false ->
                       ?debug_flag(?wait, {waiting, exiting_signal}),
-                      exiting(Reason, [], Info)
+                      exiting(Reason, [], Info#concuerror_info{caught_signal = true})
                   end
               end
           end;
@@ -991,10 +1020,11 @@ process_loop(Info) ->
            processes = Processes} = init_concuerror_info(Info),
       _ = erase(),
       Symbol = ets:lookup_element(Processes, self(), ?process_symbolic),
+      ets:insert(Processes, ?new_process(self(), Symbol)),
       ets:match_delete(EtsTables, ?ets_match_mine()),
       ets:match_delete(Links, ?links_match_mine()),
       ets:match_delete(Monitors, ?monitors_match_mine()),
-      erlang:hibernate(concuerror_callback, process_top_loop, [NewInfo, Symbol]);
+      erlang:hibernate(concuerror_callback, process_top_loop, [NewInfo]);
     deadlock_poll ->
       Info
   end.
