@@ -706,9 +706,15 @@ replay_prefix_aux([_], State) ->
   %% Last state has to be properly replayed.
   State;
 replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
+  io:format("In replay_prefix_aux 1~n"),
   #scheduler_state{logger = Logger} = State,
+  io:format("In replay_prefix_aux 2~n"),
   ?trace_nl(Logger, "~s~n", [concuerror_printer:pretty_s({I, Event})]),
-  {ok, NewEvent} = get_next_event_backend(Event, State),
+  io:format("In replay_prefix_aux 3~n"),
+  GNeb = get_next_event_backend(Event, State),
+  io:format("In replay_prefix_aux 4, GNEB = ~p~n", [GNeb]),
+  {ok, NewEvent} = GNeb,
+  io:format("In replay_prefix_aux 5~n"),
   try
     true = Event =:= NewEvent
   catch

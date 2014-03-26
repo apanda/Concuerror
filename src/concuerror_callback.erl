@@ -65,8 +65,6 @@
           next_event = none          :: 'none' | event(),
           processes                  :: processes(),
           sprocesses                 :: processes(),
-          otp_application            :: atom(),
-          otp_processes              :: atom(),
           scheduler                  :: pid(),
           stacktop = 'none'          :: 'none' | tuple(),
           status = running           :: 'exited'| 'exiting' | 'running' | 'waiting'
@@ -76,21 +74,12 @@
 
 %%------------------------------------------------------------------------------
 
-runOtp(#concuerror_info{otp_application = Module, otp_processes = _OtpProcesses, processes = Processes}) ->
-  io:format("Launching OTP applications~n"),
-  case Module of
-    undefined -> ok;
-    Module ->concuerror_application:start_application(Module, Processes)
-  end.
-
-
 -spec spawn_first_process(options()) -> pid().
 
 spawn_first_process(Options) ->
-  [AfterTimeout, Logger, Processes, SProcesses, Modules, Otp] =
-    get_properties(['after-timeout', logger, processes, sprocesses, modules, otp], Options),
+  [AfterTimeout, Logger, Processes, SProcesses, Modules] =
+    get_properties(['after-timeout', logger, processes, sprocesses, modules], Options),
   EtsTables = ets:new(ets_tables, [public]),
-  OtpProcesses = ets:new(otp_processes, [public]),
   InitialInfo =
     #concuerror_info{
        'after-timeout' = AfterTimeout,
@@ -101,13 +90,10 @@ spawn_first_process(Options) ->
        monitors        = ets:new(monitors, [bag, public]),
        processes       = Processes,
        sprocesses      = SProcesses,
-       otp_application = Otp,
-       otp_processes   = OtpProcesses,
        scheduler       = self()
       },
   system_ets_entries(EtsTables),
   system_processes_wrappers(Processes, SProcesses),
-  runOtp(InitialInfo),
   P = spawn_link(fun() -> process_top_loop(InitialInfo) end),
   true = ets:insert(Processes, ?new_process(P, "P")),
   P.

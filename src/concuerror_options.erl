@@ -53,8 +53,6 @@ options() ->
     "The module containing the main test function."}
   ,{test, [frontend], $t, "test", {atom, test},
     "The name of the 0-arity function that starts the test."}
-  ,{otp, [process, scheduler], undefined, "otp", {atom, undefined},
-     "Check an OTP application"}
   ,{output, [logger], $o, "output", {string, "results.txt"},
     "Output file."}
   ,{symbolic, [logger], $s, "symbolic", {boolean, false},
