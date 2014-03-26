@@ -289,4 +289,4 @@
        ).
 
 -define(DO_NOT_INSTRUMENT,
-       [io]).
+       [io, file]).
