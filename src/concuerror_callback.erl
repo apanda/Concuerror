@@ -755,7 +755,8 @@ run_built_in(Module, Name, Arity, Args, Info) ->
                    "data that may differ on separate runs of the program.~n"
                    "Location: ~p~n~n",
                    [Module, Name, Arity, Args, OldResult, NewResult, Location]),
-              throw(inconsistent_builtin_behaviour);
+              {NewResult, Info};
+              %throw(inconsistent_builtin_behaviour);
             false ->
               ?log(Logger, ?lerror,
                    "~nWhile re-running the program, a call to ~p:~p/~p with"
@@ -766,7 +767,8 @@ run_built_in(Module, Name, Arity, Args, Info) ->
                    "Location: ~p~n~n",
                    [Module, Name, Arity, Args, M, F,
                     length(OArgs), OArgs, Location]),
-              throw(inconsistent_builtin_behaviour)
+              {NewResult, Info}
+              %throw(inconsistent_builtin_behaviour)
           end
       end;
     undefined ->

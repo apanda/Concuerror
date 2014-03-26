@@ -155,7 +155,9 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
                   try {ok, Event} = NewEvent
                   catch
                     _:_ ->
-                      ?crash({replay_mismatch, I, Event, element(2, NewEvent)})
+                      io:format("WARNING WARNING WARNING: Mismatched response to system message"),
+                      NewEvent
+                      %?crash({replay_mismatch, I, Event, element(2, NewEvent)})
                   end;
           false ->
             %% Last event = Previously racing event = Result may differ.
@@ -719,7 +721,8 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
     true = Event =:= NewEvent
   catch
     _:_ ->
-      ?crash({replay_mismatch, I, Event, NewEvent})
+      io:format("WARNING WARNING WARNING: Mismatched response to system message")
+      %?crash({replay_mismatch, I, Event, NewEvent})
   end,
   replay_prefix_aux(Rest, maybe_log_crash(Event, State, I)).
 
@@ -751,8 +754,8 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
               proplists:get_value(message, Special),
             case OldReply =:= Reply of
               true -> Event;
-              false ->
-                error({system_reply_differs, OldReply, Reply})
+              false -> Event
+                %error({system_reply_differs, OldReply, Reply})
             end;
           false ->
             MessageEvent =
