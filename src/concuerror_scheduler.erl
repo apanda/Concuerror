@@ -136,7 +136,7 @@ log_trace(State) ->
 get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
   #trace_state{
      active_processes = ActiveProcesses,
-     index            = I,
+     index            = _I,
      pending_messages = PendingMessages,
      sleeping         = Sleeping,
      wakeup_tree      = WakeupTree
@@ -155,7 +155,7 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
                   try {ok, Event} = NewEvent
                   catch
                     _:_ ->
-                      io:format("WARNING WARNING WARNING: Mismatched response to system message"),
+                      io:format("WARNING WARNING WARNING: Mismatched response to system message ~n"),
                       NewEvent
                       %?crash({replay_mismatch, I, Event, element(2, NewEvent)})
                   end;
@@ -708,15 +708,15 @@ replay_prefix_aux([_], State) ->
   %% Last state has to be properly replayed.
   State;
 replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
-  io:format("In replay_prefix_aux 1~n"),
+  %io:format("In replay_prefix_aux 1~n"),
   #scheduler_state{logger = Logger} = State,
-  io:format("In replay_prefix_aux 2~n"),
+  %io:format("In replay_prefix_aux 2~n"),
   ?trace_nl(Logger, "~s~n", [concuerror_printer:pretty_s({I, Event})]),
-  io:format("In replay_prefix_aux 3~n"),
+  %io:format("In replay_prefix_aux 3~n"),
   GNeb = get_next_event_backend(Event, State),
-  io:format("In replay_prefix_aux 4, GNEB = ~p~n", [GNeb]),
+  %io:format("In replay_prefix_aux 4, GNEB = ~p~n", [GNeb]),
   {ok, NewEvent} = GNeb,
-  io:format("In replay_prefix_aux 5~n"),
+  %io:format("In replay_prefix_aux 5~n"),
   try
     true = Event =:= NewEvent
   catch
@@ -739,7 +739,7 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   %% Message delivery always succeeds
   %% This just makes sure there are no messages waiting in the queue right now.
   assert_no_messages(),
-  io:format("~p sending {~p, ~p} to ~p~n", [self(), Type, Message, Recipient]),
+  %io:format("~p sending {~p, ~p} to ~p~n", [self(), Type, Message, Recipient]),
   Recipient ! {Type, Message},
   UpdatedEvent =
     receive
@@ -776,13 +776,13 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
   {ok, UpdatedEvent};
 get_next_event_backend(#event{actor = Pid} = Event, State) when is_pid(Pid) ->
   assert_no_messages(),
-  io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
+  %io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
   Pid ! Event,
   get_next_event_backend_loop(Event, State).
 
 get_next_event_backend_loop(Trigger, State) ->
   #scheduler_state{wait = Wait} = State,
-  io:format("~p waiting~n", [self()]),
+  %io:format("~p waiting~n", [self()]),
   receive
     exited -> exited;
     {blocked, _} -> retry;

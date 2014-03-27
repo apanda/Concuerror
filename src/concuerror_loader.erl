@@ -39,7 +39,7 @@ load(Module, Instrumented) ->
 
 load_binary(Module, Filename, Beam, Instrumented) ->
   ets:insert(Instrumented, {Module}),
-  io:format("Asked to instrument ~p~n", [Module]),
+  %io:format("Asked to instrument ~p~n", [Module]),
   Core = get_core(Beam),
   InstrumentedCore =
     case Module =:= concuerror_inspect of
@@ -47,7 +47,7 @@ load_binary(Module, Filename, Beam, Instrumented) ->
       false -> case lists:member(Module, ?DO_NOT_INSTRUMENT) of
                  true -> io:format("Skipping instrumentation for module ~p~n", [Module]), 
                        Core;
-                 false -> io:format("Actually instrumenting module ~p~n", [Module]),
+                 false -> %io:format("Actually instrumenting module ~p~n", [Module]),
                        concuerror_instrumenter:instrument(Core, Instrumented)
                end
     end,
