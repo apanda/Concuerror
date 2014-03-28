@@ -156,6 +156,7 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
                   catch
                     _:_ ->
                       io:format("WARNING WARNING WARNING: Mismatched response to system message ~n"),
+                      io:format("Expecting ~p, found ~p", [{ok, Event}, NewEvent]),
                       NewEvent
                       %?crash({replay_mismatch, I, Event, element(2, NewEvent)})
                   end;
@@ -721,7 +722,8 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
     true = Event =:= NewEvent
   catch
     _:_ ->
-      io:format("WARNING WARNING WARNING: Mismatched response to system message")
+      io:format("WARNING WARNING WARNING: Mismatched response to system message, expected ~p found ~p ~n", [Event,
+                                                                                                            NewEvent])
       %?crash({replay_mismatch, I, Event, NewEvent})
   end,
   replay_prefix_aux(Rest, maybe_log_crash(Event, State, I)).

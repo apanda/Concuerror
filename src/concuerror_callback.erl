@@ -138,10 +138,11 @@ instrumented_top(Tag, Args, Location, {logger, _, _} = Info) ->
   Result.
 
 instrumented(call, [Module, Name, Args], Location, Info) ->
+  io:format("~p call: ~p:~p ~p~n", [self(), Module, Name, Location]),
   Arity = length(Args),
   instrumented_aux(Module, Name, Arity, Args, Location, Info);
 instrumented(apply, [Fun, Args], Location, Info) ->
-  %io:format("~p apply: ~p ~p~n", [self(), Fun, Location]),
+  io:format("~p apply: ~p ~p~n", [self(), Fun, Location]),
   case is_function(Fun) of
     true ->
       Module = get_fun_info(Fun, module),
@@ -222,9 +223,9 @@ built_in(erlang, get, _Arity, Args, _Location, Info) ->
   {{didit, erlang:apply(erlang,get,Args)}, Info};
 %% XXX: Check if its redundant (e.g. link to already linked)
 built_in(Module, Name, Arity, Args, Location, InfoIn) ->
-  %io:format("~p built_in ~p ~p ~p ~p [going to wait to process_loop]~n", [self(), Module, Name, Arity, Args]),
+  io:format("~p built_in ~p ~p ~p ~p [going to wait to process_loop]~n", [self(), Module, Name, Arity, Args]),
   Info = process_loop(InfoIn),
-  %io:format("~p built_in ~p ~p ~p ~p [stopped waiting on process_loop]~n", [self(), Module, Name, Arity, Args]),
+  io:format("~p built_in ~p ~p ~p ~p [stopped waiting on process_loop]~n", [self(), Module, Name, Arity, Args]),
   ?debug_flag(?short_builtin, {'built-in', Module, Name, Arity, Location}),
   %% {Stack, ResetInfo} = reset_stack(Info),
   %% ?debug_flag(?stack, {stack, Stack}),
@@ -285,6 +286,7 @@ translate_pid(Pid, Info) ->
 run_built_in(erlang, demonitor, 1, [Ref], Info) ->
   run_built_in(erlang, demonitor, 2, [Ref, []], Info);
 run_built_in(erlang, demonitor, 2, [Ref, Options], Info) ->
+  io:format("~p demonitor, might call has_matching_or_after~n", [self()]),
   ?badarg_if_not(is_reference(Ref)),
   #concuerror_info{monitors = Monitors} = Info,
   {Result, NewInfo} =
@@ -504,7 +506,7 @@ run_built_in(erlang, spawn, 3, [M, F, Args], Info) ->
 run_built_in(erlang, spawn_link, 3, [M, F, Args], Info) ->
   run_built_in(erlang, spawn_opt, 1, [{M, F, Args, [link]}], Info);
 run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
-  %io:format("~p Spawning new process for ~p:~p~n", [self(), Module, Name]),
+  io:format("~p Spawning new process for ~p:~p~n", [self(), Module, Name]),
   #concuerror_info{next_event = Event, processes = Processes} = Info,
   #event{event_info = EventInfo} = Event,
   Parent = self(),
@@ -780,6 +782,7 @@ run_built_in(Module, Name, Arity, Args, Info) ->
 handle_receive(PatternFun, Timeout, Location, Info) ->
   %% No distinction between replaying/new as we have to clear the message from
   %% the queue anyway...
+  io:format("~p handle_receive notify~n", [self()]),
   {MessageOrAfter, ReceiveInfo} =
     has_matching_or_after(PatternFun, Timeout, Location, Info, blocking),
   #concuerror_info{
@@ -810,6 +813,7 @@ handle_receive(PatternFun, Timeout, Location, Info) ->
   {skip_timeout, notify(Notification, UpdatedInfo)}.
 
 has_matching_or_after(PatternFun, Timeout, Location, InfoIn, Mode) ->
+  io:format("~p has_matching_or_after might notify~n", [self()]),
   {Result, NewOldMessages} = has_matching_or_after(PatternFun, Timeout, InfoIn),
   UpdatedInfo = update_messages(Result, NewOldMessages, InfoIn),
   case Mode of
@@ -883,7 +887,7 @@ fold_with_patterns(PatternFun, NewMessages, OldMessages) ->
 %%------------------------------------------------------------------------------
 
 notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
-  %io:format("~p notifying ~p ~p~n", [self(), Scheduler, Notification]),
+  io:format("~p notifying ~p ~p~n", [self(), Scheduler, Notification]),
   Scheduler ! Notification,
   Info.
 
@@ -895,7 +899,7 @@ process_top_loop(Info) ->
   receive
     {start, Module, Name, Args} ->
       ?debug_flag(?wait, {start, Module, Name, Args}),
-      %io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
+      io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
       %% It is ok for this load to fail
       concuerror_loader:load(Module, Info#concuerror_info.modules),
       put(concuerror_info, Info),
@@ -923,19 +927,20 @@ process_top_loop(Info) ->
 
 process_loop(Info) ->
   ?debug_flag(?wait, waiting),
-  %io:format("~p in process_loop now~n", [self()]),
+  io:format("~p in process_loop now~n", [self()]),
   receive
     #event{event_info = EventInfo} = Event ->
-      %io:format("~p in process_loop now, received event ~p~n", [self(), Event]),
+      io:format("~p in process_loop now, received event ~p~n", [self(), Event]),
       Status = Info#concuerror_info.status,
       case Status =:= exited of
         true ->
-          %io:format("~p in process_loop now, notifying exit~n", [self()]),
+          io:format("~p in process_loop now, notifying exit~n", [self()]),
           process_loop(notify(exited, Info));
         false ->
           NewInfo = Info#concuerror_info{next_event = Event},
           case EventInfo of
             undefined ->
+              io:format("~p in process_loop now, waiting, next_event = ~p~n", [self(), Event]),
               ?debug_flag(?wait, {waiting, exploring}),
               NewInfo;
             _OtherReplay ->
@@ -976,12 +981,12 @@ process_loop(Info) ->
           process_loop(Info)
       end;
     {message, Message} ->
-      %io:format("~p in process_loop now, received message ~p~n", [self(), Message]),
+      io:format("~p in process_loop now, received message ~p~n", [self(), Message]),
       ?debug_flag(?wait, {waiting, got_message}),
       Scheduler = Info#concuerror_info.scheduler,
       Trapping = Info#concuerror_info.flags#process_flags.trap_exit,
       Scheduler ! {trapping, Trapping},
-      %io:format("~p in process_loop now, told scheduler (~p) {trapping, ~p}~n", [self(), Scheduler, Trapping]),
+      io:format("~p in process_loop now, told scheduler (~p) {trapping, ~p}~n", [self(), Scheduler, Trapping]),
       case is_active(Info) of
         true ->
           ?debug_flag(?receive_, {message_enqueued, Message}),
@@ -1027,6 +1032,7 @@ exiting(Reason, Stacktrace, #concuerror_info{status = Status} = InfoIn) ->
   %% XXX:  - transfer ets ownership and send message or delete table
   %% XXX:  - send link signals
   %% XXX:  - send monitor messages
+  io:format("~p exiting, might notify~n", [self()]),
   Info = process_loop(InfoIn),
   ?debug_flag(?exit, {going_to_exit, Reason}),
   Self = self(),
@@ -1105,9 +1111,11 @@ ets_ownership_exiting_events(Info) ->
 
 handle_link(Link, Reason, InfoIn) ->
   MFArgs = [erlang, exit, [Link, Reason]],
-  {{didit, true}, NewInfo} =
-    instrumented(call, MFArgs, exit, InfoIn),
-  NewInfo.
+  Out = instrumented(call, MFArgs, exit, InfoIn),
+  case Out of 
+    {{didit, true}, NewInfo} -> NewInfo;
+    {{error, Info}} -> throw(Info)
+  end.
 
 handle_monitor({Ref, P}, Reason, InfoIn) ->
   Msg = {'DOWN', Ref, process, self(), Reason},
@@ -1205,8 +1213,8 @@ system_wrapper_loop(Name, Wrapped, Scheduler) ->
         _ ->
           case Data of
             {'$gen_call', {From, Mref}, Request} ->
-                %io:format("Sending to unknown process ~p~n", [Name]),
-                %io:format("Call is gen_call ~p~n", [Data]),
+                io:format("Sending to unknown process ~p~n", [Name]),
+                io:format("Call is gen_call ~p~n", [Data]),
                 NewMsg = {'$gen_call', {self(), Mref}, Request},
                 erlang:send(Wrapped, NewMsg),
                 receive
@@ -1217,6 +1225,7 @@ system_wrapper_loop(Name, Wrapped, Scheduler) ->
              _ -> 
                 io:format("Sending to unknown process ~p~n", [Name]),
                 io:format("Data is ~p~n", [Data]),
+                throw({unknown_msg, Data}),
                 erlang:send(Wrapped, Data),
                 Scheduler ! {trapping, false},
                 ok
