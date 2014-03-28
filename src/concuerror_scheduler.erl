@@ -155,8 +155,8 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
                   try {ok, Event} = NewEvent
                   catch
                     _:_ ->
-                      io:format("WARNING WARNING WARNING: Mismatched response to system message ~n"),
-                      io:format("Expecting ~p, found ~p", [{ok, Event}, NewEvent]),
+                      %io:format("WARNING WARNING WARNING: Mismatched response to system message ~n"),
+                      %io:format("Expecting ~p, found ~p", [{ok, Event}, NewEvent]),
                       NewEvent
                       %?crash({replay_mismatch, I, Event, element(2, NewEvent)})
                   end;
@@ -659,6 +659,7 @@ has_more_to_explore(State) ->
     true -> {false, State#scheduler_state{trace = []}};
     false ->
       ?debug(Logger, "New interleaving, replaying...~n", []),
+      empty_messages(),
       NewState = replay_prefix(TracePrefix, State),
       ?debug(Logger, "~s~n",["Replay done...!"]),
       FinalState = NewState#scheduler_state{trace = TracePrefix},
@@ -722,8 +723,9 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
     true = Event =:= NewEvent
   catch
     _:_ ->
-      io:format("WARNING WARNING WARNING: Mismatched response to system message, expected ~p found ~p ~n", [Event,
-                                                                                                            NewEvent])
+      true
+      %io:format("WARNING WARNING WARNING: Mismatched response to system message, expected ~p found ~p ~n", [Event,
+                                                                                                            %NewEvent])
       %?crash({replay_mismatch, I, Event, NewEvent})
   end,
   replay_prefix_aux(Rest, maybe_log_crash(Event, State, I)).
@@ -825,7 +827,20 @@ max_cv(D1, D2) ->
   Merger = fun(_Key, V1, V2) -> max(V1, V2) end,
   orddict:merge(Merger, D1, D2).
 
+empty_messages() ->
+  receive
+    _ -> empty_messages()
+  after
+    0 -> ok
+  end.
+
 assert_no_messages() ->
+  % This is actually very scary. The reason I need to do this for Rafter is that
+  % without such a thing the rafter_sup exit messages cause the entire system to 
+  % crash. On the one hand the messages being ignored here are messages we were not
+  % otherwise listening for. On the other hand this seems like a Terrible (TM) thing
+  % thing to do.
+  empty_messages(),
   receive
     Msg -> error({pending_message, Msg})
   after
