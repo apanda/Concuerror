@@ -899,7 +899,7 @@ process_top_loop(Info) ->
   receive
     {start, Module, Name, Args} ->
       ?debug_flag(?wait, {start, Module, Name, Args}),
-      %io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
+      io:format("~p told to start ~p:~p~n", [self(), Module, Name]),
       %% It is ok for this load to fail
       concuerror_loader:load(Module, Info#concuerror_info.modules),
       put(concuerror_info, Info),
@@ -927,7 +927,7 @@ process_top_loop(Info) ->
 
 process_loop(Info) ->
   ?debug_flag(?wait, waiting),
-  %io:format("~p in process_loop now~n", [self()]),
+  io:format("~p in process_loop now~n", [self()]),
   receive
     #event{event_info = EventInfo} = Event ->
       %io:format("~p in process_loop now, received event ~p~n", [self(), Event]),
@@ -1115,8 +1115,7 @@ handle_link(Link, Reason, InfoIn) ->
   case Out of 
     {{didit, true}, NewInfo} -> NewInfo;
     {{error, Info}} -> throw(Info);
-    Foo -> io:format("~p Bad handle_link Out ~p ~n", [self(), Foo]),
-           throw(Foo)
+    {{error, _Info}, NewInfo} -> NewInfo
   end.
 
 handle_monitor({Ref, P}, Reason, InfoIn) ->

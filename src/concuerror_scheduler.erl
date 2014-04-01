@@ -9,6 +9,7 @@
 
 %%-define(DEBUG, true).
 -define(CHECK_ASSERTIONS, true).
+-define(BOUNDS, 1000).
 -include("concuerror.hrl").
 
 %%------------------------------------------------------------------------------
@@ -49,7 +50,8 @@
           options          = [] :: proplists:proplist(),
           processes             :: processes(),
           trace            = [] :: [trace_state()],
-          wait                  :: non_neg_integer()
+          wait                  :: non_neg_integer(),
+          bounds                :: non_neg_integer()
          }).
 
 %% =============================================================================
@@ -85,7 +87,8 @@ run(Options) ->
        options = Options,
        processes = Processes,
        trace = [InitialTrace],
-       wait = Wait},
+       wait = Wait,
+       bounds = ?BOUNDS},
   ok = concuerror_callback:start_first_process(FirstProcess, Target),
   ?debug(Logger, "Starting exploration...~n",[]),
   concuerror_logger:plan(Logger),
@@ -101,18 +104,28 @@ get_properties([Prop|Rest], Options, Acc) ->
 
 %%------------------------------------------------------------------------------
 
-explore(State) ->
+explore(#scheduler_state{bounds = Bound} = State) ->
   {Status, UpdatedState} = get_next_event(State),
   case Status of
-    ok -> explore(UpdatedState);
+    ok -> io:format("~p continuing exploring down the old path ~p~n", [self(), Bound]),
+          case Bound of
+            1 -> #scheduler_state{trace = [_|Rest]} = UpdatedState,
+                 explore_new_paths(UpdatedState#scheduler_state{trace = Rest});
+            _ -> explore(UpdatedState)
+          end;
     none ->
-      RacesDetectedState = plan_more_interleavings(UpdatedState),
-      LogState = log_trace(RacesDetectedState),
-      {HasMore, NewState} = has_more_to_explore(LogState),
-      case HasMore of
-        true -> explore(NewState);
-        false -> ok
-      end
+      explore_new_paths(UpdatedState)
+  end.
+
+explore_new_paths(State) ->
+  % Starting the exploration of new paths
+  io:format("~p new path~n", [self()]),
+  RacesDetectedState = plan_more_interleavings(State),
+  LogState = log_trace(RacesDetectedState),
+  {HasMore, NewState} = has_more_to_explore(LogState),
+  case HasMore of
+    true -> explore(NewState);
+    false -> ok
   end.
 
 %%------------------------------------------------------------------------------
@@ -141,9 +154,13 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
      sleeping         = Sleeping,
      wakeup_tree      = WakeupTree
     } = Last,
+  % First run through we cannot have a WakeupTree yet.
   case WakeupTree of
     [] ->
+      % Make a new event
       Event = #event{label = make_ref()},
+      % Remove processes that are sleeping and messages which cannot be
+      % delivered
       {AvailablePendingMessages, AvailableActiveProcesses} =
         filter_sleeping(Sleeping, PendingMessages, ActiveProcesses),
       get_next_event(Event, AvailablePendingMessages, AvailableActiveProcesses,
@@ -180,7 +197,8 @@ filter_sleeping([#event{actor = Pid}|Sleeping],
   filter_sleeping(Sleeping, PendingMessages, NewActiveProcesses).
 
 get_next_event(Event, [{Pair, Queue}|_], _ActiveProcesses, State) ->
-  %% Pending messages can always be sent
+  % Pending messages can always be sent
+  % Sending message
   MessageEvent = queue:get(Queue),
   Special = {message_delivered, MessageEvent},
   UpdatedEvent =
@@ -188,6 +206,7 @@ get_next_event(Event, [{Pair, Queue}|_], _ActiveProcesses, State) ->
       actor = Pair,
       event_info = MessageEvent,
       special = Special},
+  % Actually send the event out.
   {ok, FinalEvent} = get_next_event_backend(UpdatedEvent, State),
   update_state(FinalEvent, State);
 get_next_event(Event, [], [P|ActiveProcesses], State) ->
@@ -247,7 +266,7 @@ reset_event(#event{actor = Actor} = Event) ->
 %%------------------------------------------------------------------------------
 
 update_state(#event{actor = Actor, special = Special} = Event,
-             #scheduler_state{logger = Logger, trace = [Last|Prev]} = State) ->
+             #scheduler_state{logger = Logger, trace = [Last|Prev], bounds = Bounds} = State) ->
   #trace_state{
      active_processes = ActiveProcesses,
      done             = Done,
@@ -280,7 +299,7 @@ update_state(#event{actor = Actor, special = Special} = Event,
   NewLastTrace =
     Last#trace_state{done = NewLastDone, wakeup_tree = NewLastWakeupTree},
   InitNewState =
-    State#scheduler_state{trace = [InitNextTrace, NewLastTrace|Prev]},
+    State#scheduler_state{trace = [InitNextTrace, NewLastTrace|Prev], bounds = Bounds - 1},
   NewState = maybe_log_crash(Event, InitNewState, Index),
   {ok, update_special(Special, NewState)}.
 
@@ -375,7 +394,10 @@ remove_pending_message(#message_event{recipient = Recipient, sender = Sender},
 plan_more_interleavings(State) ->
   #scheduler_state{logger = Logger, trace = Trace} = State,
   ?trace(Logger, "Plan more interleavings:~n", []),
+  % For the part we care about the next bit is going to return
+  % New Trace = list:reverse(Trace) 
   {OldTrace, NewTrace} = split_trace(Trace),
+  % Assign timing
   TimedNewTrace = assign_happens_before(NewTrace, OldTrace, State),
   FinalTrace =
     plan_more_interleavings(lists:reverse(OldTrace, TimedNewTrace), [], State),
@@ -388,6 +410,10 @@ split_trace([], NewTrace) ->
   {[], NewTrace};
 split_trace([#trace_state{clock_map = ClockMap} = State|Rest] = OldTrace,
             NewTrace) ->
+  io:format("Current ClockMap size is ~p~n", [dict:size(ClockMap)]),
+  % First time round the size of ClockMap should be 0 (assign_happens_before is
+  % what assigns clock map).
+  % In this case split_trace should ultimatelu just return {[], NewTrace}
   case dict:size(ClockMap) =:= 0 of
     true  -> split_trace(Rest, [State|NewTrace]);
     false -> {OldTrace, NewTrace}
@@ -656,13 +682,14 @@ has_more_to_explore(State) ->
   #scheduler_state{logger = Logger, trace = Trace} = State,
   TracePrefix = find_prefix(Trace, State),
   case TracePrefix =:= [] of
-    true -> {false, State#scheduler_state{trace = []}};
+    true -> {false, State#scheduler_state{trace = [], bounds = ?BOUNDS}};
     false ->
       ?debug(Logger, "New interleaving, replaying...~n", []),
       empty_messages(),
       NewState = replay_prefix(TracePrefix, State),
       ?debug(Logger, "~s~n",["Replay done...!"]),
-      FinalState = NewState#scheduler_state{trace = TracePrefix},
+      FinalState = NewState#scheduler_state{trace = TracePrefix, bounds =
+                                            ?BOUNDS - length(TracePrefix)},
       {true, FinalState}
   end.
 
@@ -709,7 +736,8 @@ replay_prefix(Trace, State) ->
 replay_prefix_aux([_], State) ->
   %% Last state has to be properly replayed.
   State;
-replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
+replay_prefix_aux([#trace_state{done = [#event{actor = _P} = Event|_], index = I, active_processes =
+                               _Active} = Top|Rest], State) ->
   %io:format("In replay_prefix_aux 1~n"),
   #scheduler_state{logger = Logger} = State,
   %io:format("In replay_prefix_aux 2~n"),
@@ -717,18 +745,19 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
   %io:format("In replay_prefix_aux 3~n"),
   GNeb = get_next_event_backend(Event, State),
   %io:format("In replay_prefix_aux 4, GNEB = ~p~n", [GNeb]),
-  {ok, NewEvent} = GNeb,
-  %io:format("In replay_prefix_aux 5~n"),
-  try
-    true = Event =:= NewEvent
-  catch
-    _:_ ->
-      true
-      %io:format("WARNING WARNING WARNING: Mismatched response to system message, expected ~p found ~p ~n", [Event,
-                                                                                                            %NewEvent])
-      %?crash({replay_mismatch, I, Event, NewEvent})
-  end,
-  replay_prefix_aux(Rest, maybe_log_crash(Event, State, I)).
+  case GNeb of
+    {ok, NewEvent} ->
+      try
+        true = Event =:= NewEvent
+      catch
+        _:_ ->
+          true
+          %io:format("WARNING WARNING WARNING: Mismatched response to system message, expected ~p found ~p ~n", [Event,
+                                                                                                                %NewEvent])
+          %?crash({replay_mismatch, I, Event, NewEvent})
+      end,
+      replay_prefix_aux(Rest, maybe_log_crash(Event, State, I))
+  end.
 
 %% =============================================================================
 %% INTERNAL INTERFACES
@@ -738,6 +767,7 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
 %%------------------------------------------------------------------------------
 
 get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
+  % Message send
   #event{event_info = EventInfo} = Event,
   #message_event{message = Message, type = Type} = EventInfo,
   %% Message delivery always succeeds
@@ -779,12 +809,14 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
     end,
   {ok, UpdatedEvent};
 get_next_event_backend(#event{actor = Pid} = Event, State) when is_pid(Pid) ->
+  % Other kind of message
   assert_no_messages(),
   %io:format("~p sending(2) ~p to ~p~n", [self(), Event, Pid]),
   Pid ! Event,
   get_next_event_backend_loop(Event, State).
 
 get_next_event_backend_loop(Trigger, State) ->
+  % Wait for some response from the process to which we sent the previous event
   #scheduler_state{wait = Wait} = State,
   %io:format("~p waiting~n", [self()]),
   receive
@@ -794,7 +826,9 @@ get_next_event_backend_loop(Trigger, State) ->
     {'ETS-TRANSFER', _, _, given_to_scheduler} ->
       get_next_event_backend_loop(Trigger, State)
   after
-    Wait -> ?crash({process_did_not_respond, Wait, Trigger})
+    Wait -> io:format("get_next_event_backend_loop could not get process to
+    respond to ~p~n", [Trigger]), 
+          ?crash({process_did_not_respond, Wait, Trigger})
   end.
 
 collect_deadlock_info(ActiveProcesses) ->
