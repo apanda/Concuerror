@@ -927,7 +927,6 @@ process_top_loop(Info) ->
 
 process_loop(Info) ->
   ?debug_flag(?wait, waiting),
-  io:format("~p in process_loop now~n", [self()]),
   receive
     #event{event_info = EventInfo} = Event ->
       %io:format("~p in process_loop now, received event ~p~n", [self(), Event]),

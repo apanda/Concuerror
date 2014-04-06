@@ -107,7 +107,8 @@ get_properties([Prop|Rest], Options, Acc) ->
 explore(#scheduler_state{bounds = Bound} = State) ->
   {Status, UpdatedState} = get_next_event(State),
   case Status of
-    ok -> io:format("~p continuing exploring down the old path ~p~n", [self(), Bound]),
+    ok -> 
+          %io:format("~p continuing exploring down the old path ~p~n", [self(), Bound]),
           case Bound of
             1 -> #scheduler_state{trace = [_|Rest]} = UpdatedState,
                  explore_new_paths(UpdatedState#scheduler_state{trace = Rest});
@@ -119,7 +120,7 @@ explore(#scheduler_state{bounds = Bound} = State) ->
 
 explore_new_paths(State) ->
   % Starting the exploration of new paths
-  io:format("~p new path~n", [self()]),
+  %io:format("~p new path~n", [self()]),
   RacesDetectedState = plan_more_interleavings(State),
   LogState = log_trace(RacesDetectedState),
   {HasMore, NewState} = has_more_to_explore(LogState),
@@ -410,7 +411,7 @@ split_trace([], NewTrace) ->
   {[], NewTrace};
 split_trace([#trace_state{clock_map = ClockMap} = State|Rest] = OldTrace,
             NewTrace) ->
-  io:format("Current ClockMap size is ~p~n", [dict:size(ClockMap)]),
+  %io:format("Current ClockMap size is ~p~n", [dict:size(ClockMap)]),
   % First time round the size of ClockMap should be 0 (assign_happens_before is
   % what assigns clock map).
   % In this case split_trace should ultimatelu just return {[], NewTrace}
@@ -874,7 +875,7 @@ assert_no_messages() ->
   % crash. On the one hand the messages being ignored here are messages we were not
   % otherwise listening for. On the other hand this seems like a Terrible (TM) thing
   % thing to do.
-  empty_messages(),
+  %empty_messages(),
   receive
     Msg -> error({pending_message, Msg})
   after
