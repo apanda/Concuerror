@@ -1213,23 +1213,14 @@ system_wrapper_loop(Name, Wrapped, Scheduler) ->
         _ ->
           case Data of
             {'$gen_call', {From, Mref}, Request} ->
-                %io:format("Sending to unknown process ~p~n", [Name]),
-                %io:format("Call is gen_call ~p~n", [Data]),
                 NewMsg = {'$gen_call', {self(), Mref}, Request},
                 erlang:send(Wrapped, NewMsg),
                 receive
                   Msg ->
                     Scheduler ! {system_reply, From, Id, Msg},
                     ok
-                end;
-             _ -> 
-                io:format("Sending to unknown process ~p~n", [Name]),
-                io:format("Data is ~p~n", [Data]),
-                throw({unknown_msg, Data}),
-                erlang:send(Wrapped, Data),
-                Scheduler ! {trapping, false},
-                ok
-        end
+                end
+          end
       end
   end,
   system_wrapper_loop(Name, Wrapped, Scheduler).

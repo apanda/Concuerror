@@ -789,7 +789,8 @@ get_next_event_backend(#event{actor = {_Sender, Recipient}} = Event, _State) ->
               proplists:get_value(message, Special),
             case OldReply =:= Reply of
               true -> Event;
-              false -> Event
+              false -> 
+                Event
                 %error({system_reply_differs, OldReply, Reply})
             end;
           false ->
