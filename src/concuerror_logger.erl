@@ -203,7 +203,11 @@ loop(Message, State) ->
     {complete, Warn} ->
       NewErrors =
         case Warn of
-          none -> Errors;
+          none -> 
+            io:format(Output, "Good interleaving ~p:~n", [TracesExplored]),
+            separator(Output, $-),
+            print_streams(Streams, Output),
+            Errors;
           {Warnings, TraceInfo} ->
             NE = Errors + 1,
             case NE > 1 of
@@ -320,7 +324,10 @@ print_streams(Streams, Output) ->
 
 print_stream(Tag, Buffer, Output) ->
   io:format(Output, "Text printed to ~s:~n", [tag_to_filename(Tag)]),
-  io:format(Output, "~s~n", [lists:reverse(Buffer)]),
+  % [apanda] Removing lists:reverse, at least on OTP 16 & 17 append seems to add to 
+  % the end of a list. This also agrees with the definition for append in the Erlang
+  % man pages
+  io:format(Output, "~s~n", [Buffer]),
   separator(Output, $-).
 
 tag_to_filename(standard_io) -> "Standard Output";
