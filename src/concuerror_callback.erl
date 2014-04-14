@@ -63,8 +63,8 @@
           instant_delivery = false   :: boolean(),
           links                      :: links(),
           logger                     :: pid(),
-          messages_new = queue:new() :: queue(),
-          messages_old = queue:new() :: queue(),
+          messages_new = queue:new() :: queue:queue(message()),
+          messages_old = queue:new() :: queue:queue(message()),
           modules                    :: modules(),
           monitors                   :: monitors(),
           event = none               :: 'none' | event(),
@@ -980,6 +980,7 @@ has_matching_or_after(PatternFun, Timeout, Location, InfoIn, Mode) ->
               true ->
                 process_loop(notify({blocked, Location}, UpdatedInfo));
               false ->
+                %io:format("~p is now waiting, reason: ~p~n", [self(), Location]),
                 process_loop(set_status(UpdatedInfo, waiting))
             end,
           has_matching_or_after(PatternFun, Timeout, Location, NewInfo, Mode);

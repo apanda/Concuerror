@@ -13,8 +13,8 @@
 
 %%------------------------------------------------------------------------------
 
-%% -type clock_vector() :: orddict:orddict(). %% orddict(pid(), index()).
--type clock_map()    :: dict(). %% dict(pid(), clock_vector()).
+-type clock_vector() :: orddict:orddict(pid(), index()). %% orddict(pid(), index()).
+-type clock_map()    :: dict:dict(pid(), clock_vector()). %% dict(pid(), clock_vector()).
 
 %%------------------------------------------------------------------------------
 
@@ -112,7 +112,7 @@ get_properties([Prop|Rest], Options, Acc) ->
 
 %%------------------------------------------------------------------------------
 
-explore(State) ->
+explore(#scheduler_state{logger = Logger} = State) ->
   {Status, UpdatedState} =
     try
       get_next_event(State)
@@ -122,6 +122,9 @@ explore(State) ->
   case Status of
     ok -> explore(UpdatedState);
     none ->
+      ?trace(Logger, "============================================================================~n", []),
+      ?trace(Logger, "                     Starting New Exploration                               ~n", []),
+      ?trace(Logger, "============================================================================~n", []),
       RacesDetectedState = plan_more_interleavings(UpdatedState),
       LogState = log_trace(RacesDetectedState),
       {HasMore, NewState} = has_more_to_explore(LogState),
@@ -217,7 +220,7 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
             catch
               _:_ ->
                 #scheduler_state{print_depth = PrintDepth} = State,
-                ?crash({replay_mismatch, I, Event, element(2, NewEvent), PrintDepth})
+                ?crash({replay_mismatch, gne ,I, {ok, Event}, NewEvent, PrintDepth})
             end;
           false ->
             %% Last event = Previously racing event = Result may differ.
@@ -800,7 +803,7 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
   catch
     _:_ ->
       #scheduler_state{print_depth = PrintDepth} = State,
-      ?crash({replay_mismatch, I, Event, NewEvent, PrintDepth})
+      ?crash({replay_mismatch, rpa, I, Event, NewEvent, PrintDepth})
   end,
   replay_prefix_aux(Rest, maybe_log_crash(Event, State, I)).
 
@@ -811,8 +814,8 @@ replay_prefix_aux([#trace_state{done = [Event|_], index = I}|Rest], State) ->
 %% Between scheduler and an instrumented process
 %%------------------------------------------------------------------------------
 
-get_next_event_backend(#event{actor = Channel} = Event, State)
-  when ?is_channel(Channel) ->
+get_next_event_backend(#event{actor = Channel} = Event, State) 
+                                        when ?is_channel(Channel) ->
   #scheduler_state{timeout = Timeout} = State,
   #event{event_info = MessageEvent} = Event,
   assert_no_messages(),
@@ -859,7 +862,20 @@ explain_error(first_interleaving_crashed) ->
     "The first interleaving of your test had some error. You may pass"
     " --allow_first_crash to let Concuerror continue or use some other option"
     " to ignore the reported error.",[]);
-explain_error({replay_mismatch, I, Event, NewEvent, Depth}) ->
+explain_error({no_response_for_message, Timeout, Recipient}) ->
+  io_lib:format(
+    "A process took more than ~pms to send an acknowledgement for a message"
+    " that was sent to it. (Process: ~p)~n"
+    ?notify_us_msg,
+    [Timeout, Recipient]);
+explain_error({process_did_not_respond, Timeout, Actor}) ->
+  io_lib:format( 
+    "A process took more than ~pms to report a built-in event. You can try to"
+    " increase the --timeout limit and/or ensure that there are no infinite"
+    " loops in your test. (Process: ~p)",
+    [Timeout, Actor]
+   );
+explain_error({replay_mismatch, Where, I, Event, NewEvent, Depth}) ->
   [EString, NEString] =
     [concuerror_printer:pretty_s(E, Depth) || E <- [Event, NewEvent]],
   [Original, New] =
@@ -869,10 +885,10 @@ explain_error({replay_mismatch, I, Event, NewEvent, Depth}) ->
         [io_lib:format("~p",[E]) || E <- [Event, NewEvent]]
     end,
   io_lib:format(
-    "On step ~p, replaying a built-in returned a different result than"
+    "On step ~p, replaying a built-in (~p) returned a different result than"
     " expected:~n"
     "  original: ~s~n"
     "  new     : ~s~n"
     ?notify_us_msg,
-    [I,Original,New]
+    [I,Where,Original,New]
    ).
