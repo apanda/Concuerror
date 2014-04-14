@@ -341,7 +341,12 @@ update_state(#event{actor = Actor, special = Special} = Event, State) ->
 
 maybe_log_crash(Event, #scheduler_state{treat_as_normal = Normal} = State, Index) ->
   case Event#event.event_info of
-    #exit_event{reason = Reason} = Exit ->
+    #exit_event{reason = Reason0} = Exit ->
+      Reason = 
+        case Reason0 of
+          {R, _} -> R;
+          R -> R
+        end,
       case lists:member(Reason, Normal) of
         true -> State;
         false ->
