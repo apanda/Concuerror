@@ -112,9 +112,12 @@ get_properties([Prop|Rest], Options, Acc) ->
 
 %%------------------------------------------------------------------------------
 
+% Actually explore things.
 explore(#scheduler_state{logger = Logger} = State) ->
   {Status, UpdatedState} =
     try
+      % get_next_event is responsible for picking an event and executing it.
+      % Returns a status new state in exchange
       get_next_event(State)
     catch
       exit:Reason -> {{crash, Reason}, State}
@@ -166,7 +169,6 @@ log_trace(State) ->
       true -> none;
       false ->
         #scheduler_state{trace = Trace} = State,
-        %%io:format("~p~n",[Trace]),
         Fold =
           fun(#trace_state{done = [A|_], index = I}, Acc) -> [{I, A}|Acc] end,
         TraceInfo = lists:foldl(Fold, [], Trace),
@@ -206,6 +208,8 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
     } = Last,
   case WakeupTree of
     [] ->
+      %% Initially WakeupTree is empty, AvailablePendingMessages is [] and only initial
+      %% process is active
       Event = #event{label = make_ref()},
       {AvailablePendingMessages, AvailableActiveProcesses} =
         filter_sleeping(Sleeping, PendingMessages, ActiveProcesses),
@@ -301,6 +305,7 @@ reset_event(#event{actor = Actor, event_info = EventInfo}) ->
 
 %%------------------------------------------------------------------------------
 
+% On receiving an event update scheduler state
 update_state(#event{actor = Actor, special = Special} = Event, State) ->
   #scheduler_state{logger = Logger, trace = [Last|Prev]} = State,
   #trace_state{

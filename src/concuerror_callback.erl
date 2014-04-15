@@ -133,13 +133,20 @@ start_first_process(Pid, {Module, Name, Args}, Timeout) ->
                           'skip_timeout'.
 
 instrumented_top(Tag, Args, Location, #concuerror_info{} = Info) ->
+  % Process dictionary
   #concuerror_info{escaped_pdict = Escaped} = Info,
+  % Put process dictionary in current environment
   lists:foreach(fun({K,V}) -> put(K,V) end, Escaped),
+  % Call instrumented
   {Result, #concuerror_info{} = NewInfo} =
     instrumented(Tag, Args, Location, Info),
+  % On return erase process dictionary store it.
   NewEscaped = erase(),
+  % Compute new Concuerror information
   FinalInfo = NewInfo#concuerror_info{escaped_pdict = NewEscaped},
+  % Save concuerror information
   put(concuerror_info, FinalInfo),
+  % Return the result
   Result;
 instrumented_top(Tag, Args, Location, {logger, _, _} = Info) ->
   {Result, _} = instrumented(Tag, Args, Location, Info),
@@ -170,6 +177,7 @@ instrumented('receive', [PatternFun, Timeout], Location, Info) ->
           false -> Timeout;
           true -> infinity
         end,
+      % Receives are handled differently
       handle_receive(PatternFun, RealTimeout, Location, Info);
     _Logger ->
       {doit, Info}
@@ -186,6 +194,7 @@ instrumented_aux(Module, Name, Arity, Args, Location, Info)
     true ->
       case Info of
         #concuerror_info{} ->
+          % Call function built_in
           built_in(Module, Name, Arity, Args, Location, Info);
         {logger, Processes, _} ->
           case {Module, Name, Arity} =:= {erlang, pid_to_list, 1} of
@@ -202,12 +211,17 @@ instrumented_aux(Module, Name, Arity, Args, Location, Info)
           end
       end;
     false ->
+      % If either this is not a built in or is safe/race free
       {Modules, Report} =
         case Info of
           #concuerror_info{modules = M} -> {M, true};
           {logger, _, M} -> {M, false}
         end,
+      % Find and load the module.
       ok = concuerror_loader:load(Module, Modules, Report),
+      % Return doit and #concuerror_info, which instrumented will eventually return and
+      % which concuerror_inspect:instrumented finally takes as a cue to call the right
+      % function.
       {doit, Info}
   end;
 instrumented_aux({Module, _} = Tuple, Name, Arity, Args, Location, Info) ->
@@ -241,6 +255,8 @@ built_in(erlang, system_info, 1, [A], _Location, Info)
   {doit, Info};
 %% XXX: Check if its redundant (e.g. link to already linked)
 built_in(Module, Name, Arity, Args, Location, InfoIn) ->
+  % Most built_ins end up here. 
+  % Start by calling process_loop
   Info = process_loop(InfoIn),
   ?debug_flag(?short_builtin, {'built-in', Module, Name, Arity, Location}),
   %% {Stack, ResetInfo} = reset_stack(Info),
@@ -248,8 +264,11 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
   #concuerror_info{flags = #process_flags{trap_exit = Trapping}} = LocatedInfo =
     add_location_info(Location, Info#concuerror_info{extra = undefined}),%ResetInfo),
   try
+    % Run built-in compute new #concuerror_info from running built in.
     {Value, UpdatedInfo} = run_built_in(Module, Name, Arity, Args, LocatedInfo),
+    % The next event might be a message send, look into that
     #concuerror_info{extra = Extra, event = MaybeMessageEvent} = UpdatedInfo,
+    % If we have instantaneous message delivery, deliver the message.
     Event = maybe_deliver_message(MaybeMessageEvent, UpdatedInfo),
     ?debug_flag(?builtin, {'built-in', Module, Name, Arity, Value, Location}),
     ?debug_flag(?args, {args, Args}),
@@ -261,6 +280,7 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
          mfargs = {Module, Name, Args},
          result = Value
         },
+    % Notify scheduler of event.
     Notification = Event#event{event_info = EventInfo},
     NewInfo = notify(Notification, UpdatedInfo),
     {{didit, Value}, NewInfo}
@@ -812,8 +832,13 @@ maybe_deliver_message(#event{special = Special} = Event, Info) ->
   case proplists:lookup(message, Special) of
     none -> Event;
     {message, MessageEvent} ->
+      % Is instant_delivery set to true
       #concuerror_info{instant_delivery = InstantDelivery} = Info,
+      % Message event: find information about instant delivery
       #message_event{recipient = Recipient, instant = Instant} = MessageEvent,
+      % If the message is marked for instant delivery or is addressed to self and
+      % instant delivery is enabled.
+      % Not Instant is currently always true (assume all processes are local).
       case (InstantDelivery orelse Recipient =:= self()) andalso Instant of
         false -> Event;
         true ->
@@ -824,7 +849,7 @@ maybe_deliver_message(#event{special = Special} = Event, Info) ->
   end.
 
 -spec deliver_message(event(), message_event(), timeout()) -> event().
-
+% This is called by the scheduler and maybe_deliver_message to deliver a message.
 deliver_message(Event, MessageEvent, Timeout) ->
   deliver_message(Event, MessageEvent, Timeout, false).
 
@@ -980,7 +1005,6 @@ has_matching_or_after(PatternFun, Timeout, Location, InfoIn, Mode) ->
               true ->
                 process_loop(notify({blocked, Location}, UpdatedInfo));
               false ->
-                %io:format("~p is now waiting, reason: ~p~n", [self(), Location]),
                 process_loop(set_status(UpdatedInfo, waiting))
             end,
           has_matching_or_after(PatternFun, Timeout, Location, NewInfo, Mode);
@@ -1050,6 +1074,7 @@ notify(Notification, #concuerror_info{scheduler = Scheduler} = Info) ->
 -spec process_top_loop(concuerror_info()) -> no_return().
 
 process_top_loop(Info) ->
+  % New processes end up here, waiting to be started.
   ?debug_flag(?loop, top_waiting),
   receive
     reset -> process_top_loop(Info);
@@ -1057,6 +1082,19 @@ process_top_loop(Info) ->
       ?debug_flag(?loop, {start, Module, Name, Args}),
       put(concuerror_info, Info),
       try
+        % Call concuerror_inspect:instrumented. concuerror_inspect:instrumented
+        % starts by calling instrumented_top, which in turn calls instrumented, which
+        % in turn calls instrumented_aux
+        %
+        % instrumented_aux calls concuerror_loader:load, thus loading any unloaded modules
+        % and returns doit, Info. The next time we stop is at the call to a BIF that has not
+        % been marked safe.
+        % More consicely
+        % start -> concuerror_inspect:instrumented(call, ...)
+        %       -> instrumented_top % Restores process dictionary, etc.
+        %       -> instrumented
+        %       -> instrumented_aux -> load if necessary
+        %       ... -> built_in
         concuerror_inspect:instrumented(call, [Module,Name,Args], start),
         exit(normal)
       catch
@@ -1080,6 +1118,7 @@ process_top_loop(Info) ->
   end.
 
 new_process(ParentInfo) ->
+  % Start a new process. 
   Info = ParentInfo#concuerror_info{notify_when_ready = {self(), true}},
   spawn_link(fun() -> process_top_loop(Info) end).
 
@@ -1094,13 +1133,17 @@ wait_process(Pid, Timeout) ->
 
 process_loop(#concuerror_info{notify_when_ready = {Pid, true}} = Info) ->
   ?debug_flag(?loop, notifying_parent),
+  % Notify the scheduler that the process is in process_loop/is broken in
+  % for the first time.
   Pid ! ready,
   process_loop(Info#concuerror_info{notify_when_ready = {Pid, false}});
 process_loop(Info) ->
   ?debug_flag(?loop, process_loop),
   receive
+    % Receive #event{event_info = EventInfo}
     #event{event_info = EventInfo} = Event ->
       ?debug_flag(?loop, got_event),
+      % Get current status
       Status = Info#concuerror_info.status,
       case Status =:= exited of
         true ->
