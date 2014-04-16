@@ -54,6 +54,8 @@ mapfold(Tree, {Instrumented, Var}) ->
         Timeout = cerl:receive_timeout(Tree),
         Action = cerl:receive_action(Tree),
         Fun = receive_matching_fun(Tree),
+        % Step 1: Call ?inspect:instrumented with the match function and timeout
+        % to see what succeeds.
         Call = inspect('receive', [Fun, Timeout], Tree),
         case Timeout =:= cerl:c_atom(infinity) of
           false ->
@@ -61,11 +63,13 @@ mapfold(Tree, {Instrumented, Var}) ->
             %% skippable on demand.
             TimeoutVar = cerl:c_var(Var),
             RecTree = cerl:update_c_receive(Tree, Clauses, TimeoutVar, Action),
+            % Now make it so Step 1 is called before actual receive, and timeout can be skipped.
             cerl:update_tree(Tree, 'let', [[TimeoutVar], [Call], [RecTree]]);
           true ->
             %% Leave infinity timeouts unaffected, as the default code generated
             %% by the compiler does not bind any additional variables in the
             %% after clause.
+            % Now make it so Step 1 is called before actual receive.
             cerl:update_tree(Tree, seq, [[Call], [Tree]])
         end;
       _ -> Tree

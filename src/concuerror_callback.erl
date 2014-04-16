@@ -255,7 +255,7 @@ built_in(erlang, system_info, 1, [A], _Location, Info)
   {doit, Info};
 %% XXX: Check if its redundant (e.g. link to already linked)
 built_in(Module, Name, Arity, Args, Location, InfoIn) ->
-  % Most built_ins end up here. 
+  % Most built_ins end up here.
   % Start by calling process_loop
   Info = process_loop(InfoIn),
   ?debug_flag(?short_builtin, {'built-in', Module, Name, Arity, Location}),
@@ -933,7 +933,7 @@ find_system_reply(System, [_|Special]) ->
 wait_actor_reply(Event, Timeout) ->
   receive
     exited -> exited;
-    {blocked, _} -> retry;
+    {blocked, _} ->  retry;
     #event{} = NewEvent -> {ok, NewEvent};
     {'ETS-TRANSFER', _, _, given_to_scheduler} ->
       wait_actor_reply(Event, Timeout);
@@ -1003,8 +1003,13 @@ has_matching_or_after(PatternFun, Timeout, Location, InfoIn, Mode) ->
           NewInfo =
             case InfoIn#concuerror_info.status =:= waiting of
               true ->
+                % This time round notify the scheduler blocked.
                 process_loop(notify({blocked, Location}, UpdatedInfo));
               false ->
+                % The first time through receive does not wait in process_loop, no
+                % one is waiting gor us to notify. The next time we get here
+                % process_loop would have been notified and thus we need to notify it
+                % that this process is blocked
                 process_loop(set_status(UpdatedInfo, waiting))
             end,
           has_matching_or_after(PatternFun, Timeout, Location, NewInfo, Mode);
@@ -1019,6 +1024,8 @@ has_matching_or_after(PatternFun, Timeout, Location, InfoIn, Mode) ->
   end.
 
 update_messages(Result, NewOldMessages, Info) ->
+  % Not worth searching through old messages put them in a new
+  % queue.
   case Result =:= false of
     true ->
       Info#concuerror_info{
@@ -1028,9 +1035,10 @@ update_messages(Result, NewOldMessages, Info) ->
       Info#concuerror_info{
         messages_new = NewOldMessages,
         messages_old = queue:new()}
-  end.      
+  end.
 
 has_matching_or_after(PatternFun, Timeout, Info) ->
+  % See if there is a message that matches the current pattern.
   #concuerror_info{messages_new = NewMessages,
                    messages_old = OldMessages} = Info,
   {Result, NewOldMessages} =
@@ -1118,7 +1126,7 @@ process_top_loop(Info) ->
   end.
 
 new_process(ParentInfo) ->
-  % Start a new process. 
+  % Start a new process.
   Info = ParentInfo#concuerror_info{notify_when_ready = {self(), true}},
   spawn_link(fun() -> process_top_loop(Info) end).
 
@@ -1638,7 +1646,7 @@ explain_error({not_local_node, Node}) ->
     " remote nodes yet.",
     [Node]);
 explain_error({process_did_not_respond, Timeout, Actor}) ->
-  io_lib:format( 
+  io_lib:format(
     "A process took more than ~pms to report a built-in event. You can try to"
     " increase the --timeout limit and/or ensure that there are no infinite"
     " loops in your test. (Process: ~p)",
