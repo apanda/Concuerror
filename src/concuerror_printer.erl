@@ -183,6 +183,10 @@ simple_pretty_info(#builtin_event{status = {crashed, Reason}}) ->
                 [Reason]);
 simple_pretty_info(#builtin_event{mfargs = {erlang, '!', [To, Msg]}}) ->
   io_lib:format("send(~w, ~w)", [To, Msg]);
+simple_pretty_info(#builtin_event{mfargs = {erlang, send, [To, Msg]}}) ->
+  io_lib:format("send(~w, ~w)", [To, Msg]);
+simple_pretty_info(#builtin_event{mfargs = {erlang, send, [To, Msg, _]}}) ->
+  io_lib:format("send(~w, ~w)", [To, Msg]);
 simple_pretty_info(#builtin_event{mfargs = {erlang, spawn_opt, _}}) ->
   io_lib:format("spawn_opt", []);
 simple_pretty_info(#builtin_event{mfargs = {M, F, Args}}) ->

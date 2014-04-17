@@ -295,7 +295,8 @@
                  {setelement, 3},
                  {term_to_binary, 1},
                  {throw, 1},
-                 {tuple_to_list, 1}
+                 {tuple_to_list, 1},
+                 {get_stacktrace, 0}
                 ]]
         ++ [{file, N, A} ||
                {N, A} <-

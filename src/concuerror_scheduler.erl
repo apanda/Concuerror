@@ -135,7 +135,6 @@ explore(#scheduler_state{logger = Logger} = State) ->
       ?trace(Logger, "                     Starting New Exploration                               ~n", []),
       ?trace(Logger, "============================================================================~n", []),
       RacesDetectedState = plan_more_interleavings(UpdatedState),
-      throw(prov_only),
       LogState = log_trace(RacesDetectedState),
       {HasMore, NewState} = has_more_to_explore(LogState),
       case HasMore of
@@ -478,6 +477,7 @@ plan_more_interleavings(State) ->
   io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
   project_provenance(Provenance, Processes, ChronoTrace),
   io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
+  throw(prov_only),
   ?time(Logger, "Planning more interleavings..."),
   NewRevTrace = plan_more_interleavings(ChronoTrace, [], State),
   State#scheduler_state{trace = NewRevTrace}.
