@@ -61,6 +61,8 @@ options() ->
     "The name of the 0-arity function that starts the test."}
   ,{output, [logger], $o, {string, "results.txt"},
     "Output file where Concuerror shall write the results of the analysis."}
+  ,{provenance, [scheduler], $o, {string, "provenance.txt"},
+    "Output file where Concuerror shall write provenance information."}
   ,{help, [frontend], $h, undefined,
     "Display this information."}
   ,{version, [frontend], undefined, undefined,
@@ -242,10 +244,10 @@ finalize([{Key, Value}|Rest], Acc) ->
           finalize(NewRest, [{target, {Value, Name, []}}|Acc]);
         _ -> opt_error("The name of the test function is missing")
       end;
-    output ->
+    OKey when OKey =:= output; OKey =:= provenance ->
       case file:open(Value, [write]) of
         {ok, IoDevice} ->
-          finalize(Rest, [{Key, {IoDevice, Value}}|Acc]);
+          finalize(Rest, [{OKey, {IoDevice, Value}}|Acc]);
         {error, _} ->
           opt_error("could not open file ~s for writing", [Value])
       end;

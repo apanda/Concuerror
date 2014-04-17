@@ -2,7 +2,7 @@
 
 -module(concuerror_printer).
 
--export([error_s/2, pretty/3, pretty_s/2]).
+-export([error_s/2, pretty/3, pretty_s/2, print_p/2]).
 
 -include("concuerror.hrl").
 
@@ -36,6 +36,47 @@ error_s({Type, Info}, Depth) ->
     sleep_set_block ->
       io_lib:format("* Nobody woke-up: ~p~n", [Info])
   end.
+
+print_actor({A, B}) ->
+  io_lib:format("{~s, ~s}", [A, B]);
+print_actor(A) ->
+  io_lib:format("~s", [A]).
+
+-spec print_p(io:device(), [{{index(), event()}, [{index(), atom()}]}]) -> ok.
+
+print_p(_Output, []) ->
+  ok;
+print_p(Output, [Current | Rest]) ->
+ {{CurrentIndex, CurrentEvent}, Related} = Current,
+ #event{
+    actor = Actor,
+    event_info = EventInfo, 
+    location = Location
+ } = CurrentEvent,
+ Preamble = 
+    io_lib:format("~w\1~s\1~s\1~s", 
+        [CurrentIndex, print_actor(Actor), simple_pretty_info(EventInfo), location_string(Location, EventInfo)]),
+ Dependencies =  dependency_string(Related, ""),
+ io:format(Output, "~s\1[~s]~n", [Preamble, Dependencies]),
+ print_p(Output, Rest).
+
+location_string(Location, EventInfo) ->
+  case Location of
+    [Line, {file, File}] -> io_lib:format("~s",[location_o(File, Line)]);
+    exit ->
+      case EventInfo of
+        #exit_event{} -> "exit";
+        _Other -> io_lib:format("exit", [])
+      end;
+    _ -> ""
+  end.
+
+dependency_string([], String) ->
+  String;
+dependency_string([{Idx, Why} | Rest], "") ->
+  dependency_string(Rest, io_lib:format("{~w, ~p}", [Idx, Why]));
+dependency_string([{Idx, Why} | Rest], S) ->
+  dependency_string(Rest, io_lib:format("~s ,{~w, ~p}", [S, Idx, Why])).
 
 -spec pretty(io:device(), event(), pos_integer()) -> ok.
 
@@ -137,6 +178,49 @@ pretty_info(#receive_event{message = Message, timeout = Timeout}, Depth) ->
       io_lib:format("receives message (~W)", [Data, Depth])
   end.
 
+simple_pretty_info(#builtin_event{status = {crashed, Reason}}) ->
+  io_lib:format("exception(~w)",
+                [Reason]);
+simple_pretty_info(#builtin_event{mfargs = {erlang, '!', [To, Msg]}}) ->
+  io_lib:format("send(~w, ~w)", [To, Msg]);
+simple_pretty_info(#builtin_event{mfargs = {erlang, spawn_opt, _}}) ->
+  io_lib:format("spawn_opt", []);
+simple_pretty_info(#builtin_event{mfargs = {M, F, Args}}) ->
+  io_lib:format("built_in(~w:~w/~w)",[M, F, length(Args)]);
+simple_pretty_info(#exit_event{reason = Reason}) ->
+  ReasonStr =
+    case Reason =:= normal of
+      true -> "normally";
+      false -> io_lib:format("abnormally(~w)", [Reason])
+    end,
+  io_lib:format("exits(~s)",[ReasonStr]);
+simple_pretty_info(#message_event{} = MessageEvent) ->
+  #message_event{
+     message = #message{data = Data, id=Id},
+     recipient = _Recipient,
+     sender = Sender,
+     type = Type
+    } = MessageEvent,
+  MsgString =
+    case Type of
+      message -> io_lib:format("~w", [Id]);
+      exit_signal ->
+        Reason =
+          case Data of
+            {'EXIT', Sender, R} -> R;
+            kill -> kill
+          end,
+        io_lib:format("~w, exit(~w)",[Id, Reason])
+    end,
+  io_lib:format("message_deliver(~w, ~s)", [Sender, MsgString]);
+simple_pretty_info(#receive_event{message = Message, timeout = Timeout}) ->
+  case Message of
+    'after' ->
+      io_lib:format("timeout(~p)", [Timeout]);
+     #message{id = Id} ->
+      io_lib:format("message_receive(~w)", [Id])
+  end.
+
 pretty_arg(Args, Depth) ->
   pretty_arg(lists:reverse(Args), "", Depth).
 
@@ -149,3 +233,7 @@ pretty_arg([Arg|Args], Acc, Depth) ->
 location(F, L) ->
   Basename = filename:basename(F),
   io_lib:format("in ~s line ~w", [Basename, L]).
+
+location_o(F, L) ->
+  Basename = filename:basename(F),
+  io_lib:format("~s(~w)", [Basename, L]).

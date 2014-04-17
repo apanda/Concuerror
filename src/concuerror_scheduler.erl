@@ -32,7 +32,8 @@
           pending_messages = orddict:new() :: orddict:orddict(),
           preemptions      = 0             :: non_neg_integer(),
           sleeping         = []            :: [event()],
-          wakeup_tree      = []            :: event_tree()
+          wakeup_tree      = []            :: event_tree(),
+          provenance       = []            :: [{index(), atom()}]
          }).
 
 -type trace_state() :: #trace_state{}.
@@ -53,7 +54,9 @@
           processes                :: processes(),
           timeout                  :: timeout(),
           trace             = []   :: [trace_state()],
-          treat_as_normal   = []   :: [atom()]
+          treat_as_normal   = []   :: [atom()],
+          provenance               :: file:io_device(),
+          provenance_name          :: string()
          }).
 
 %% =============================================================================
@@ -72,10 +75,10 @@ run(Options) ->
       ok
   end,
   [AllowFirstCrash,AssumeRacing,DepthBound,IgnoreError,Logger,NonRacingSystem,
-   PrintDepth,Processes,Target,Timeout,TreatAsNormal] =
+   PrintDepth,Processes,Target,Timeout,TreatAsNormal, {Provenance, ProvenanceName}] =
     get_properties(
       [allow_first_crash,assume_racing,depth_bound,ignore_error,logger,
-       non_racing_system,print_depth,processes,target,timeout,treat_as_normal],
+       non_racing_system,print_depth,processes,target,timeout,treat_as_normal, provenance],
       Options),
   ProcessOptions =
     [O || O <- Options, concuerror_options:filter_options('process', O)],
@@ -96,7 +99,10 @@ run(Options) ->
        processes = Processes,
        trace = [InitialTrace],
        treat_as_normal = TreatAsNormal,
-       timeout = Timeout},
+       timeout = Timeout,
+       provenance = Provenance,
+       provenance_name = ProvenanceName
+      },
   ok = concuerror_callback:start_first_process(FirstProcess, Target, Timeout),
   concuerror_logger:plan(Logger),
   ?time(Logger, "Exploration start"),
@@ -129,6 +135,7 @@ explore(#scheduler_state{logger = Logger} = State) ->
       ?trace(Logger, "                     Starting New Exploration                               ~n", []),
       ?trace(Logger, "============================================================================~n", []),
       RacesDetectedState = plan_more_interleavings(UpdatedState),
+      throw(prov_only),
       LogState = log_trace(RacesDetectedState),
       {HasMore, NewState} = has_more_to_explore(LogState),
       case HasMore of
@@ -442,18 +449,37 @@ remove_pending_message(#message_event{recipient = Recipient, sender = Sender},
   end.
 
 %%------------------------------------------------------------------------------
+actor_to_symbolic({A1, A2}, Processes) ->
+  {ets:lookup_element(Processes, A1, ?process_symbolic),
+   ets:lookup_element(Processes, A2, ?process_symbolic)};
+actor_to_symbolic(Actor, Processes) ->
+  ets:lookup_element(Processes, Actor, ?process_symbolic).
+
+project_provenance(_, _, []) ->
+  ok;
+project_provenance(Provenance, Processes, [TraceState | Later]) ->
+  #trace_state{done = [Event|_], index = Index, provenance = Deps} = TraceState,
+  Actor = Event#event.actor,
+  %ActorSymbolic = ets:lookup_element(Processes, Actor, ?process_symbolic),
+  ActorSymbolic = actor_to_symbolic(Actor, Processes),
+  concuerror_printer:print_p(Provenance,  [{{Index, Event#event{actor=ActorSymbolic}}, Deps}]), 
+  project_provenance(Provenance, Processes, Later).
 
 plan_more_interleavings(State) ->
-  #scheduler_state{logger = Logger, trace = RevTrace} = State,
+  #scheduler_state{provenance = Provenance, processes=Processes, logger = Logger, trace = RevTrace} = State,
   ?time(Logger, "Assigning happens-before..."),
   % Reverse Early and Untimed late. Untimed late in this case is the set of events that
   % do not have a logical clock associated with them.
   {RevEarly, UntimedLate} = split_trace(RevTrace),
   % Assign timings to the untimed bit. Late is in chronological order.
   Late = assign_happens_before(UntimedLate, RevEarly, State),
-  ?time(Logger, "Planning more interleavings..."),
   % At this point RevEarly is reversed. lists:reverse(RevEarly, Late) returns chronological order.
-  NewRevTrace = plan_more_interleavings(lists:reverse(RevEarly, Late), [], State),
+  ChronoTrace = lists:reverse(RevEarly, Late),
+  io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
+  project_provenance(Provenance, Processes, ChronoTrace),
+  io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
+  ?time(Logger, "Planning more interleavings..."),
+  NewRevTrace = plan_more_interleavings(ChronoTrace, [], State),
   State#scheduler_state{trace = NewRevTrace}.
 
 split_trace(RevTrace) ->
@@ -478,12 +504,18 @@ assign_happens_before([], RevLate, _RevEarly, _State) ->
 % then ...
 assign_happens_before([TraceState|Later], RevLate, RevEarly, State) ->
   #scheduler_state{logger = Logger, message_info = MessageInfo} = State,
-  #trace_state{done = [Event|RestEvents], index = Index} = TraceState,
+  #trace_state{done = [Event|RestEvents], index = Index, provenance=Deps0} = TraceState,
   #event{actor = Actor, special = Special} = Event,
   % Get last logical clock map assigned
   ClockMap = get_base_clock(RevLate, RevEarly),
   % Get vector clock for current Actor (or empty dictionary which we will use)
   OldClock = lookup_clock(Actor, ClockMap),
+  % Get the last index at which this actor took a step, causal relation says everything done by 
+  % the same actor is causally linked. Record this linkage.
+  Deps = case ?is_channel(Actor) of
+   false -> [{lookup_clock_value(Actor, OldClock), proc_step} | Deps0];
+   true -> Deps0
+  end,
   % Update dictionary to say that the current actor's own time is Index. Standard vector clock
   % update.
   ActorClock = orddict:store(Actor, Index, OldClock),
@@ -491,22 +523,23 @@ assign_happens_before([TraceState|Later], RevLate, RevEarly, State) ->
   ?trace(Logger, "~p~n", [Event]),
   % Update vector clock based on messages delivered and received
   % (message_send -> message_delivered -> message_received)
-  BaseHappenedBeforeClock =
-    add_pre_message_clocks(Special, MessageInfo, ActorClock),
+  {BaseHappenedBeforeClock, BaseDeps} =
+    add_pre_message_clocks(Special, MessageInfo, ActorClock, Deps),
   % Take the trace so far in reverse chronological order (RevLate and RevEarly are
   % both reversed. Check for events that are causally related to the current event, update
   % clock as appropriate.
-  HappenedBeforeClock =
-    update_clock(RevLate++RevEarly, Event, BaseHappenedBeforeClock, State),
+  {HappenedBeforeClock, HBDeps} =
+    update_clock(RevLate++RevEarly, Event, BaseHappenedBeforeClock, State, BaseDeps),
   % If this event involved sending a message, record message send time in ets.
-  maybe_mark_sent_message(Special, HappenedBeforeClock, MessageInfo),
+  maybe_mark_sent_message(Special, HappenedBeforeClock, Index, MessageInfo),
   UpdatedEvent =
     % Was a message_delivered this index?
     case proplists:lookup(message_delivered, Special) of
       none -> Event;
       {message_delivered, MessageEvent} ->
         #message_event{message = #message{id = Id}} = MessageEvent,
-        Delivery = {?message_delivered, HappenedBeforeClock},
+        Delivery = [{?message_delivered, HappenedBeforeClock}, 
+                    {?message_delivered_idx, Index}],
         % If so update the clock for when the message was delivered.
         ets:update_element(MessageInfo, Id, Delivery),
         % Look up the Pattern function that this message matched.
@@ -520,21 +553,29 @@ assign_happens_before([TraceState|Later], RevLate, RevEarly, State) ->
           lists:keyreplace(message_delivered, 1, Special, UpdatedMessageEvent),
         Event#event{special = UpdatedSpecial}
     end,
+  SpawnHappenedBeforeClock = 
+    case proplists:lookup(new, Special) of
+      {new, SPid} ->
+        orddict:store(SPid, Index, HappenedBeforeClock);
+      none -> HappenedBeforeClock
+    end,
   % Save the happens before clock for the current actor.
-  BaseNewClockMap = dict:store(Actor, HappenedBeforeClock, ClockMap),
+  BaseNewClockMap = dict:store(Actor, SpawnHappenedBeforeClock, ClockMap),
   % If a new PID was spawned save two copies, one for the new PID, one for the
-  % old one.
+  % old one. The dependency tracking for this is trivial since the next event will
+  % depend on this index.
   NewClockMap =
     case proplists:lookup(new, Special) of
       {new, SpawnedPid} ->
-        dict:store(SpawnedPid, HappenedBeforeClock, BaseNewClockMap);
+        dict:store(SpawnedPid, SpawnHappenedBeforeClock, BaseNewClockMap);
       none -> BaseNewClockMap
     end,
-  % Now that we have a clock for the current time just store that.
+  % Now that we have a clock and dependencies for the current trace event just store that.
   NewTraceState =
     TraceState#trace_state{
       clock_map = NewClockMap,
-      done = [UpdatedEvent|RestEvents]},
+      done = [UpdatedEvent|RestEvents],
+      provenance = HBDeps},
   assign_happens_before(Later, [NewTraceState|RevLate], RevEarly, State).
 
 get_base_clock(RevLate, RevEarly) ->
@@ -552,52 +593,56 @@ get_base_clock(RevLate, RevEarly) ->
 get_base_clock([]) -> throw(none);
 get_base_clock([#trace_state{clock_map = ClockMap}|_]) -> ClockMap.
 
-add_pre_message_clocks([], _, Clock) -> Clock;
+add_pre_message_clocks([], _, Clock, Deps) -> {Clock, Deps};
 % In general order of events is message_sent -> message_delivered -> message_received
-add_pre_message_clocks([Special|Specials], MessageInfo, Clock) ->
-  NewClock =
+add_pre_message_clocks([Special|Specials], MessageInfo, Clock, Deps) ->
+  {NewClock, NewDeps} =
     case Special of
       {message_received, Id, _} ->
         case ets:lookup_element(MessageInfo, Id, ?message_delivered) of
           % If for some reason we don't have a message_delivered before this message_received
           % (for instance the current message comes from a system process), we have learnt nothing
           % so set vector clock to what we had so far.
-          undefined -> Clock;
+          undefined -> {Clock, Deps};
           % Else we received a message from somewhere, it has a vector clock from being delivered,
           % update our vector clock to note this fact.
-          RMessageClock -> max_cv(Clock, RMessageClock)
+          RMessageClock -> {max_cv(Clock, RMessageClock), 
+                            [{ets:lookup_element(MessageInfo, Id, ?message_delivered_idx), message_received}
+                             |Deps]}
         end;
       {message_delivered, #message_event{message = #message{id = Id}}} ->
         % A message is being delivered, figure out the clock to associte with it.
-        message_clock(Id, MessageInfo, Clock);
-      _ -> Clock
+        message_clock(Id, MessageInfo, Clock, Deps);
+      _ -> {Clock, Deps}
     end,
-  add_pre_message_clocks(Specials, MessageInfo, NewClock).
+  add_pre_message_clocks(Specials, MessageInfo, NewClock, NewDeps).
 
-message_clock(Id, MessageInfo, ActorClock) ->
+message_clock(Id, MessageInfo, ActorClock, Deps) ->
   % Lookup to see if message was sent.
   case ets:lookup_element(MessageInfo, Id, ?message_sent) of
     % If we don't know when message was sent we know nothing new. Vector clock is unchanged.
-    undefined -> ActorClock;
+    undefined -> {ActorClock, Deps};
     % Update vector clock to indicate message delivery.
-    MessageClock -> max_cv(ActorClock, MessageClock)
+    MessageClock -> {max_cv(ActorClock, MessageClock),
+                     [{ets:lookup_element(MessageInfo, Id, ?message_sent_idx), message_delivered}|Deps]}
   end.
 
 % For the empty list the Clock does not need to be updated.
-update_clock([], _Event, Clock, _State) ->
-  Clock;
+update_clock([], _Event, Clock, _State, Deps) ->
+  {Clock, Deps};
 % For an actual list.
-update_clock([TraceState|Rest], Event, Clock, State) ->
+update_clock([TraceState|Rest], Event, Clock, State, Deps) ->
   #trace_state{
      done = [#event{actor = EarlyActor} = EarlyEvent|_],
      index = EarlyIndex
     } = TraceState,
   % What does the current actor think the other actor's index is.
   EarlyClock = lookup_clock_value(EarlyActor, Clock),
-  NewClock =
+  {NewClock, NewDeps} =
     case EarlyIndex > EarlyClock of
-      % We already think that this action has happened
-      false -> Clock;
+      % We already think that this action has happened. In particular this implies that
+      % we should be tracking this dependency from somewhere else.
+      false -> {Clock, Deps};
       true ->
         % Is the earlier event related to this event
         #scheduler_state{assume_racing = AssumeRacing} = State,
@@ -608,29 +653,30 @@ update_clock([TraceState|Rest], Event, Clock, State) ->
                "    ~s ~s~n",
                [star(Dependent), ?pretty_s(EarlyIndex,EarlyEvent)]),
         case Dependent of
-          % If not dependent then the clock remains unchanged.
-          false -> Clock;
+          % If not dependent the the clock remains unchanged. Also this means we clearly are not
+          % dependent on this thing.
+          false -> {Clock, Deps};
           % If dependent and potentially irreversible
           True when True =:= true; True =:= irreversible ->
             % Find the event producers clock.
             #trace_state{clock_map = ClockMap} = TraceState,
             EarlyActorClock = lookup_clock(EarlyActor, ClockMap),
             % Update vector clock as if we received a message.
-            max_cv(Clock, EarlyActorClock)
+            {max_cv(Clock, EarlyActorClock), [{EarlyIndex, erlang_dep} | Deps]}
         end
     end,
-  update_clock(Rest, Event, NewClock, State).
+  update_clock(Rest, Event, NewClock, State, NewDeps).
 
 star(false) -> " ";
 star(_) -> "*".
 
-maybe_mark_sent_message(Special, Clock, MessageInfo) when is_list(Special)->
+maybe_mark_sent_message(Special, Clock, Index, MessageInfo) when is_list(Special)->
   Message = proplists:lookup(message, Special),
-  maybe_mark_sent_message(Message, Clock, MessageInfo);
-maybe_mark_sent_message({message, Message}, Clock, MessageInfo) ->
+  maybe_mark_sent_message(Message, Clock, Index, MessageInfo);
+maybe_mark_sent_message({message, Message}, Clock, Index, MessageInfo) ->
   #message_event{message = #message{id = Id}} = Message,
-  ets:update_element(MessageInfo, Id, {?message_sent, Clock});
-maybe_mark_sent_message(_, _, _) -> true.
+  ets:update_element(MessageInfo, Id, [{?message_sent, Clock}, {?message_sent_idx, Index}]);
+maybe_mark_sent_message(_, _, _, _) -> true.
 
 % OldTrace starts out as an empty list.
 plan_more_interleavings([], OldTrace, _SchedulerState) ->
@@ -663,7 +709,8 @@ plan_more_interleavings([TraceState|Rest], OldTrace, State) ->
           true ->
             % If this is a channel update Actor's clock with message information.
             #message_event{message = #message{id = Id}} = EventInfo,
-            message_clock(Id, MessageInfo, ActorClock);
+            {Clk, _} =  message_clock(Id, MessageInfo, ActorClock, []),
+            Clk;
           false -> ActorClock
         end,
       ?trace(Logger, "~s~n", [?pretty_s(Index, Event)]),

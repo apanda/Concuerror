@@ -14,6 +14,8 @@
           log_msgs = []                :: [string()],
           output                       :: file:io_device(),
           output_name                  :: string(),
+          %provenance                   :: file:io_device(),
+          %provenance_name              :: string(),
           print_depth                  :: pos_integer(),
           streams = []                 :: [{stream(), [string()]}],
           timestamp = erlang:now()     :: erlang:timestamp(),
@@ -36,9 +38,10 @@ start(Options) ->
   end.
 
 run(Parent, Options) ->
-  [Verbosity,{Output, OutputName},SymbolicNames,PrintDepth,Processes,Modules] =
+  [Verbosity,{Output, OutputName},
+                        SymbolicNames,PrintDepth,Processes,Modules] =
     concuerror_common:get_properties(
-      [verbosity,output,symbolic,print_depth,processes,modules], Options),
+      [verbosity,output, symbolic,print_depth,processes,modules], Options),
   ets:insert(Modules, {{logger}, self()}),
   ok = setup_symbolic_names(SymbolicNames, Processes, Modules),
   PrintableOptions = delete_many([processes, output, modules], Options),
@@ -52,6 +55,8 @@ run(Parent, Options) ->
     #logger_state{
        output = Output,
        output_name = OutputName,
+       %provenance = Provenance,
+       %provenance_name = ProvenanceName,
        print_depth = PrintDepth,
        verbosity = Verbosity},
   Parent ! logger_ready,
@@ -128,6 +133,7 @@ loop(Message, State) ->
      errors = Errors,
      log_msgs = LogMsgs,
      output = Output,
+     %provenance = Provenance,
      print_depth = PrintDepth,
      streams = Streams,
      ticker = Ticker,

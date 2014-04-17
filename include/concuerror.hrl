@@ -102,11 +102,14 @@
 -define(MINIMUM_TIMEOUT, 1000).
 %%------------------------------------------------------------------------------
 -type message_info() :: ets:tid().
-
--define(new_message_info(Id), {Id, none, undefined, undefined}).
+% message_info: ID, pattern function, clock for sent, clock for delivered, 
+% index for sent, index for delivered 
+-define(new_message_info(Id), {Id, none, undefined, undefined, 1, 1}).
 -define(message_pattern, 2).
 -define(message_sent, 3).
 -define(message_delivered, 4).
+-define(message_sent_idx, 5).
+-define(message_delivered_idx, 6).
 %%------------------------------------------------------------------------------
 -type ets_tables() :: ets:tid().
 
