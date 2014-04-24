@@ -607,7 +607,7 @@ add_pre_message_clocks([Special|Specials], MessageInfo, Clock, Deps) ->
           % Else we received a message from somewhere, it has a vector clock from being delivered,
           % update our vector clock to note this fact.
           RMessageClock -> {max_cv(Clock, RMessageClock), 
-                            [{ets:lookup_element(MessageInfo, Id, ?message_delivered_idx), message_received}
+                            [{ets:lookup_element(MessageInfo, Id, ?message_sent_idx), message_received}
                              |Deps]}
         end;
       {message_delivered, #message_event{message = #message{id = Id}}} ->
