@@ -6,7 +6,7 @@
 -export([instrumented_top/4]).
 
 %% Interface to scheduler:
--export([spawn_first_process/1, start_first_process/3,
+-export([spawn_first_process/1, start_first_process/3, start_prov_only_process/3, 
          deliver_message/3, wait_actor_reply/2, collect_deadlock_info/1]).
 
 %% Interface for resetting:
@@ -119,6 +119,13 @@ spawn_first_process(Options) ->
 start_first_process(Pid, {Module, Name, Args}, Timeout) ->
   Pid ! {start, Module, Name, Args},
   wait_process(Pid, Timeout),
+  ok.
+
+-spec start_prov_only_process(pid(), {atom(), atom(), [term()]}, timeout()) -> ok.
+
+start_prov_only_process(Pid, {Module, Name, Args}, Timeout) ->
+  Pid ! {start_prov, Module, Name, Args},
+  %wait_process(Pid, Timeout),
   ok.
 
 %%------------------------------------------------------------------------------
@@ -1086,6 +1093,10 @@ process_top_loop(Info) ->
   ?debug_flag(?loop, top_waiting),
   receive
     reset -> process_top_loop(Info);
+    {start_prov, Module, Name, Args} ->
+      ?debug_flag(?loop, {start_prov, Module, Name, Args}),
+      concuerror_inspect:instrumented(call, [Module, Name, Args], start),
+      exit(normal);
     {start, Module, Name, Args} ->
       ?debug_flag(?loop, {start, Module, Name, Args}),
       put(concuerror_info, Info),

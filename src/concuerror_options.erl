@@ -63,6 +63,8 @@ options() ->
     "Output file where Concuerror shall write the results of the analysis."}
   ,{provenance, [scheduler], $o, {string, "provenance.txt"},
     "Output file where Concuerror shall write provenance information."}
+  ,{instrumented, [scheduler], undefined, {boolean, false},
+    "Run instrumented process only, no DPOR or other exploration"}
   ,{help, [frontend], $h, undefined,
     "Display this information."}
   ,{version, [frontend], undefined, undefined,

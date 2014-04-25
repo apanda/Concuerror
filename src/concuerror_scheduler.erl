@@ -62,11 +62,48 @@
 %% =============================================================================
 %% LOGIC (high level description of the exploration algorithm)
 %% =============================================================================
-
 -spec run(options()) -> ok.
-
 run(Options) ->
+  case proplists:get_value(instrumented, Options) of
+    true ->
+      provenance_only_run(Options);
+    false ->
+      run_dpor(Options)
+  end.
+
+-spec provenance_only_run(options()) -> ok.
+provenance_only_run(Options) ->
+  % Want to trap any exit signals (other than kill)
   process_flag(trap_exit, true),
+  % Make sure erlang.beam is available somewhere
+  case code:get_object_code(erlang) =:= error of
+    true ->
+      true =
+        code:add_pathz(filename:join(code:root_dir(), "erts/preloaded/ebin"));
+    false ->
+      ok
+  end,
+  [Target, Timeout, Logger] =
+    get_properties(
+      [target, timeout, logger],
+      Options),
+  ProcessOptions =
+    [O || O <- Options, concuerror_options:filter_options('process', O)],
+  ?debug(Logger, "Starting first process...~n",[]),
+  FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions),
+  ok = concuerror_callback:start_prov_only_process(FirstProcess, Target, Timeout),
+  ?time(Logger, "Exploration start"),
+  receive
+      Msg ->
+          io:format("PPPP Scheduler exiting, having received ~p~n", [Msg])
+  end.
+
+-spec run_dpor(options()) -> ok.
+
+run_dpor(Options) ->
+  % Want to trap any exit signals (other than kill)
+  process_flag(trap_exit, true),
+  % Make sure erlang.beam is available somewhere
   case code:get_object_code(erlang) =:= error of
     true ->
       true =
@@ -204,6 +241,9 @@ get_next_event(
       current_warnings = [{depth_bound, Bound}|Warnings],
       trace = Old},
   {none, NewState};
+
+%% Initially WakeupTree is empty, AvailablePendingMessages is [] and only initial
+%% process is active
 get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
   #trace_state{
      active_processes = ActiveProcesses,
@@ -214,8 +254,6 @@ get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
     } = Last,
   case WakeupTree of
     [] ->
-      %% Initially WakeupTree is empty, AvailablePendingMessages is [] and only initial
-      %% process is active
       Event = #event{label = make_ref()},
       {AvailablePendingMessages, AvailableActiveProcesses} =
         filter_sleeping(Sleeping, PendingMessages, ActiveProcesses),
@@ -454,15 +492,15 @@ actor_to_symbolic({A1, A2}, Processes) ->
 actor_to_symbolic(Actor, Processes) ->
   ets:lookup_element(Processes, Actor, ?process_symbolic).
 
-project_provenance(_, _, []) ->
-  ok;
-project_provenance(Provenance, Processes, [TraceState | Later]) ->
-  #trace_state{done = [Event|_], index = Index, provenance = Deps} = TraceState,
-  Actor = Event#event.actor,
-  %ActorSymbolic = ets:lookup_element(Processes, Actor, ?process_symbolic),
-  ActorSymbolic = actor_to_symbolic(Actor, Processes),
-  concuerror_printer:print_p(Provenance,  [{{Index, Event#event{actor=ActorSymbolic}}, Deps}]), 
-  project_provenance(Provenance, Processes, Later).
+%project_provenance(_, _, []) ->
+  %ok;
+%project_provenance(Provenance, Processes, [TraceState | Later]) ->
+  %#trace_state{done = [Event|_], index = Index, provenance = Deps} = TraceState,
+  %Actor = Event#event.actor,
+  %%ActorSymbolic = ets:lookup_element(Processes, Actor, ?process_symbolic),
+  %ActorSymbolic = actor_to_symbolic(Actor, Processes),
+  %concuerror_printer:print_p(Provenance,  [{{Index, Event#event{actor=ActorSymbolic}}, Deps}]), 
+  %project_provenance(Provenance, Processes, Later).
 
 plan_more_interleavings(State) ->
   #scheduler_state{provenance = Provenance, processes=Processes, logger = Logger, trace = RevTrace} = State,
@@ -474,10 +512,10 @@ plan_more_interleavings(State) ->
   Late = assign_happens_before(UntimedLate, RevEarly, State),
   % At this point RevEarly is reversed. lists:reverse(RevEarly, Late) returns chronological order.
   ChronoTrace = lists:reverse(RevEarly, Late),
-  io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
-  project_provenance(Provenance, Processes, ChronoTrace),
-  io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
-  throw(prov_only),
+  %io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
+  %project_provenance(Provenance, Processes, ChronoTrace),
+  %io:format(Provenance, "-------------------------------------------------------------------------------~n", []),
+  %throw(prov_only),
   ?time(Logger, "Planning more interleavings..."),
   NewRevTrace = plan_more_interleavings(ChronoTrace, [], State),
   State#scheduler_state{trace = NewRevTrace}.
