@@ -123,7 +123,7 @@ start_first_process(Pid, {Module, Name, Args}, Timeout) ->
 
 -spec start_prov_only_process(pid(), {atom(), atom(), [term()]}, timeout()) -> ok.
 
-start_prov_only_process(Pid, {Module, Name, Args}, Timeout) ->
+start_prov_only_process(Pid, {Module, Name, Args}, _Timeout) ->
   Pid ! {start_prov, Module, Name, Args},
   %wait_process(Pid, Timeout),
   ok.
@@ -155,6 +155,10 @@ instrumented_top(Tag, Args, Location, #concuerror_info{} = Info) ->
   put(concuerror_info, FinalInfo),
   % Return the result
   Result;
+instrumented_top(Tag, Args, Location, {instrument_only, _Modules} = Info) ->
+  Result = instrumented(Tag, Args, Location, Info),
+  put(concuerror_info, Info),
+  Result;
 instrumented_top(Tag, Args, Location, {logger, _, _} = Info) ->
   {Result, _} = instrumented(Tag, Args, Location, Info),
   put(concuerror_info, Info),
@@ -176,6 +180,8 @@ instrumented(apply, [Fun, Args], Location, Info) ->
     false ->
       {doit, Info}
   end;
+instrumented('receive', [_PatternFun, _Timeout], _Location, {instrument_only, _}) ->
+  doit;
 instrumented('receive', [PatternFun, Timeout], Location, Info) ->
   case Info of
     #concuerror_info{after_timeout = AfterTimeout} ->
@@ -192,6 +198,10 @@ instrumented('receive', [PatternFun, Timeout], Location, Info) ->
 
 instrumented_aux(erlang, apply, 3, [Module, Name, Args], Location, Info) ->
   instrumented_aux(Module, Name, length(Args), Args, Location, Info);
+instrumented_aux(Module, _Name, _Arity, _Args, _Location, {instrument_only, Modules})
+  when is_atom(Module) ->
+    ok = concuerror_loader:load(Module, Modules, true),
+    doit;
 instrumented_aux(Module, Name, Arity, Args, Location, Info)
   when is_atom(Module) ->
   case
@@ -1095,6 +1105,7 @@ process_top_loop(Info) ->
     reset -> process_top_loop(Info);
     {start_prov, Module, Name, Args} ->
       ?debug_flag(?loop, {start_prov, Module, Name, Args}),
+      put(concuerror_info, {instrument_only, Info#concuerror_info.modules}),
       concuerror_inspect:instrumented(call, [Module, Name, Args], start),
       exit(normal);
     {start, Module, Name, Args} ->
