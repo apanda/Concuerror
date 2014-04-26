@@ -198,11 +198,6 @@ instrumented('receive', [PatternFun, Timeout], Location, Info) ->
 
 instrumented_aux(erlang, apply, 3, [Module, Name, Args], Location, Info) ->
   instrumented_aux(Module, Name, length(Args), Args, Location, Info);
-%instrumented_aux(Module, _Name, _Arity, _Args, _Location, 
-                 %#concuerror_info{is_instrument_only=true, modules=M}=Info)
-  %when is_atom(Module) ->
-    %ok = concuerror_loader:load(Module, M, true),
-    %{doit, Info};
 instrumented_aux(Module, Name, Arity, Args, Location, Info)
   when is_atom(Module) ->
   case
