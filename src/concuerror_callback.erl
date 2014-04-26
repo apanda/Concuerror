@@ -6,7 +6,7 @@
 -export([instrumented_top/4]).
 
 %% Interface to scheduler:
--export([spawn_first_process/1, start_first_process/3, start_prov_only_process/3, 
+-export([spawn_first_process/1, start_first_process/3, start_instrument_only_process/2, 
          deliver_message/3, wait_actor_reply/2, collect_deadlock_info/1]).
 
 %% Interface for resetting:
@@ -74,7 +74,8 @@
           scheduler                  :: pid(),
           stacktop = 'none'          :: 'none' | tuple(),
           status = running           :: 'exited'| 'exiting' | 'running' | 'waiting',
-          timeout                    :: timeout()
+          timeout                    :: timeout(),
+          is_instrument_only = false :: boolean()
          }).
 
 -type concuerror_info() :: #concuerror_info{}.
@@ -121,11 +122,10 @@ start_first_process(Pid, {Module, Name, Args}, Timeout) ->
   wait_process(Pid, Timeout),
   ok.
 
--spec start_prov_only_process(pid(), {atom(), atom(), [term()]}, timeout()) -> ok.
+-spec start_instrument_only_process(pid(), {atom(), atom(), [term()]}) -> ok.
 
-start_prov_only_process(Pid, {Module, Name, Args}, _Timeout) ->
-  Pid ! {start_prov, Module, Name, Args},
-  %wait_process(Pid, Timeout),
+start_instrument_only_process(Pid, {Module, Name, Args}) ->
+  Pid ! {start_instrument, Module, Name, Args},
   ok.
 
 %%------------------------------------------------------------------------------
@@ -139,6 +139,10 @@ start_prov_only_process(Pid, {Module, Name, Args}, _Timeout) ->
                           {'error', term()} |
                           'skip_timeout'.
 
+instrumented_top(Tag, Args, Location, #concuerror_info{is_instrument_only=true} = Info) ->
+  {Result, NewInfo} = instrumented(Tag, Args, Location, Info),
+  put(concuerror_info, NewInfo),
+  Result;
 instrumented_top(Tag, Args, Location, #concuerror_info{} = Info) ->
   % Process dictionary
   #concuerror_info{escaped_pdict = Escaped} = Info,
@@ -154,10 +158,6 @@ instrumented_top(Tag, Args, Location, #concuerror_info{} = Info) ->
   % Save concuerror information
   put(concuerror_info, FinalInfo),
   % Return the result
-  Result;
-instrumented_top(Tag, Args, Location, {instrument_only, _Modules} = Info) ->
-  Result = instrumented(Tag, Args, Location, Info),
-  put(concuerror_info, Info),
   Result;
 instrumented_top(Tag, Args, Location, {logger, _, _} = Info) ->
   {Result, _} = instrumented(Tag, Args, Location, Info),
@@ -180,8 +180,8 @@ instrumented(apply, [Fun, Args], Location, Info) ->
     false ->
       {doit, Info}
   end;
-instrumented('receive', [_PatternFun, _Timeout], _Location, {instrument_only, _}) ->
-  doit;
+instrumented('receive', [_PatternFun, _Timeout], _Location, #concuerror_info{is_instrument_only=true}=Info) ->
+  {doit, Info};
 instrumented('receive', [PatternFun, Timeout], Location, Info) ->
   case Info of
     #concuerror_info{after_timeout = AfterTimeout} ->
@@ -198,10 +198,11 @@ instrumented('receive', [PatternFun, Timeout], Location, Info) ->
 
 instrumented_aux(erlang, apply, 3, [Module, Name, Args], Location, Info) ->
   instrumented_aux(Module, Name, length(Args), Args, Location, Info);
-instrumented_aux(Module, _Name, _Arity, _Args, _Location, {instrument_only, Modules})
-  when is_atom(Module) ->
-    ok = concuerror_loader:load(Module, Modules, true),
-    doit;
+%instrumented_aux(Module, _Name, _Arity, _Args, _Location, 
+                 %#concuerror_info{is_instrument_only=true, modules=M}=Info)
+  %when is_atom(Module) ->
+    %ok = concuerror_loader:load(Module, M, true),
+    %{doit, Info};
 instrumented_aux(Module, Name, Arity, Args, Location, Info)
   when is_atom(Module) ->
   case
@@ -271,10 +272,18 @@ built_in(erlang, system_info, 1, [A], _Location, Info)
        ->
   {doit, Info};
 %% XXX: Check if its redundant (e.g. link to already linked)
-built_in(Module, Name, Arity, Args, Location, InfoIn) ->
+built_in(Module, Name, Arity, Args, Location, #concuerror_info{is_instrument_only=InstrumentOnly}=InfoIn) ->
   % Most built_ins end up here.
-  % Start by calling process_loop
-  Info = process_loop(InfoIn),
+  % Start by calling process_loop. process_loop spins waiting for the scheduler
+  % to request a step.
+  Info = 
+    case InstrumentOnly of
+      true -> 
+        FakeEvent = #event{actor = self(),
+                       label = make_ref()},
+        InfoIn#concuerror_info{event=FakeEvent};
+      false -> process_loop(InfoIn)
+    end,
   ?debug_flag(?short_builtin, {'built-in', Module, Name, Arity, Location}),
   %% {Stack, ResetInfo} = reset_stack(Info),
   %% ?debug_flag(?stack, {stack, Stack}),
@@ -299,10 +308,16 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
         },
     % Notify scheduler of event.
     Notification = Event#event{event_info = EventInfo},
-    NewInfo = notify(Notification, UpdatedInfo),
+    NewInfo = 
+      case InstrumentOnly of
+        true ->  UpdatedInfo;
+        false -> notify(Notification, UpdatedInfo)
+      end,
     {{didit, Value}, NewInfo}
   catch
     throw:Reason ->
+      io:format("Crashing ~p ~p ~p ~p ~p~n", [self(), Name, Arity, Args, Location]),
+      io:format("~p~n", [erlang:get_stacktrace()]),
       #concuerror_info{scheduler = Scheduler} = Info,
       ?debug_flag(?loop, crashing),
       exit(Scheduler, {Reason, Module, Name, Arity, Args, Location}),
@@ -316,6 +331,9 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
            trapping = Trapping
           },
       FNotification = FEvent#event{event_info = FEventInfo},
+      io:format("Crashing ~p ~p ~p ~p ~p~n", [self(), Name, Arity, Args, Location]),
+      io:format("~p~n", [erlang:get_stacktrace()]),
+      receive after 10000->ok end,
       FNewInfo = notify(FNotification, LocatedInfo),
       FinalInfo =
         FNewInfo#concuerror_info{stacktop = {Module, Name, Args, Location}},
@@ -325,6 +343,8 @@ built_in(Module, Name, Arity, Args, Location, InfoIn) ->
 %% Special instruction running control (e.g. send to unknown -> wait for reply)
 run_built_in(erlang, demonitor, 1, [Ref], Info) ->
   run_built_in(erlang, demonitor, 2, [Ref, []], Info);
+run_built_in(erlang, demonitor, 2, [Ref, Options], #concuerror_info{is_instrument_only=true}=Info) ->
+  {erlang:demonitor(Ref, Options), Info};
 run_built_in(erlang, demonitor, 2, [Ref, Options], Info) ->
   ?badarg_if_not(is_reference(Ref)),
   #concuerror_info{monitors = Monitors} = Info,
@@ -382,10 +402,19 @@ run_built_in(erlang, exit, 2, [Pid, Reason],
   end;
 
 run_built_in(erlang, group_leader, 0, [],
+             #concuerror_info{is_instrument_only=true} = Info) ->
+  Leader = erlang:group_leader(),
+  {Leader, Info};
+run_built_in(erlang, group_leader, 0, [],
              #concuerror_info{processes = Processes} = Info) ->
   Leader = ets:lookup_element(Processes, self(), ?process_leader),
   {Leader, Info};
 
+run_built_in(erlang, group_leader, 2, [GroupLeader, Pid],
+             #concuerror_info{is_instrument_only=true} = Info) ->
+  ?badarg_if_not(is_pid(GroupLeader) andalso is_pid(Pid)),
+  Ret = erlang:group_leader(GroupLeader, Pid),
+  {Ret, Info};
 run_built_in(erlang, group_leader, 2, [GroupLeader, Pid],
              #concuerror_info{processes = Processes} = Info) ->
   ?badarg_if_not(is_pid(GroupLeader) andalso is_pid(Pid)),
@@ -454,6 +483,8 @@ run_built_in(erlang, Name, 0, [], Info)
       undefined -> erlang:apply(erlang,Name,[])
     end,
   {Ref, Info};
+run_built_in(erlang, monitor, 2, [Type, Target], #concuerror_info{is_instrument_only=true} = Info) ->
+  {erlang:monitor(Type, Target), Info};
 run_built_in(erlang, monitor, 2, [Type, Target], Info) ->
   #concuerror_info{
      monitors = Monitors,
@@ -573,7 +604,8 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
   #concuerror_info{
      event = Event,
      processes = Processes,
-     timeout = Timeout} = Info,
+     timeout = Timeout,
+     is_instrument_only = InstrumentOnly} = Info,
   #event{event_info = EventInfo} = Event,
   Parent = self(),
   {Result, NewInfo} =
@@ -615,8 +647,14 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
   end,
   {GroupLeader, _} = run_built_in(erlang, group_leader, 0, [], Info),
   true = ets:update_element(Processes, Pid, {?process_leader, GroupLeader}),
-  Pid ! {start, Module, Name, Args},
-  wait_process(Pid, Timeout),
+  case InstrumentOnly of
+    false ->
+      %Pid ! {start, Module, Name, Args},
+      %wait_process(Pid, Timeout);
+      start_first_process(Pid, {Module, Name, Args}, Timeout);
+    true ->
+      start_instrument_only_process (Pid, {Module, Name, Args})
+  end,
   {Result, NewInfo};
 run_built_in(erlang, Send, 2, [Recipient, Message], Info)
   when Send =:= '!'; Send =:= 'send' ->
@@ -679,6 +717,19 @@ run_built_in(erlang, unregister, 1, [Name],
     _:_ -> error(badarg)
   end;
 run_built_in(erlang, whereis, 1, [Name],
+             #concuerror_info{processes = Processes,
+                              is_instrument_only = true} = Info) ->
+  case ets:match(Processes, ?process_match_name_to_type(Name)) of
+    [] ->
+      case whereis(Name) =:= undefined of
+        true -> {undefined, Info};
+        false -> throw({system_process_not_wrapped, Name})
+      end;
+    [[wrapped, _]] -> {whereis(Name), Info};
+    [[regular, Pid]] -> {Pid, Info};
+    [[Type, _Pid]] -> throw({unknown_type, Type})
+  end;
+run_built_in(erlang, whereis, 1, [Name],
              #concuerror_info{processes = Processes} = Info) ->
   case ets:match(Processes, ?process_match_name_to_pid(Name)) of
     [] ->
@@ -688,6 +739,8 @@ run_built_in(erlang, whereis, 1, [Name],
       end;
     [[Pid]] -> {Pid, Info}
   end;
+run_built_in(ets, F, _, Args, #concuerror_info{is_instrument_only=true}=Info) ->
+  {erlang:apply(ets, F, Args), Info};
 run_built_in(ets, new, 2, [Name, Options], Info) ->
   ?badarg_if_not(is_atom(Name)),
   NoNameOptions = [O || O <- Options, O =/= named_table],
@@ -845,23 +898,33 @@ consistent_replay(Module, Name, Arity, Args, Info) ->
 
 %%------------------------------------------------------------------------------
 
-maybe_deliver_message(#event{special = Special} = Event, Info) ->
+maybe_deliver_message(#event{special = Special} = Event, 
+                      #concuerror_info{is_instrument_only=InstrumentOnly}=Info) ->
   case proplists:lookup(message, Special) of
     none -> Event;
     {message, MessageEvent} ->
-      % Is instant_delivery set to true
-      #concuerror_info{instant_delivery = InstantDelivery} = Info,
-      % Message event: find information about instant delivery
-      #message_event{recipient = Recipient, instant = Instant} = MessageEvent,
-      % If the message is marked for instant delivery or is addressed to self and
-      % instant delivery is enabled.
-      % Not Instant is currently always true (assume all processes are local).
-      case (InstantDelivery orelse Recipient =:= self()) andalso Instant of
-        false -> Event;
+      case InstrumentOnly of
+        false ->
+          % Is instant_delivery set to true
+          #concuerror_info{instant_delivery = InstantDelivery} = Info,
+          % Message event: find information about instant delivery
+          #message_event{recipient = Recipient, instant = Instant} = MessageEvent,
+          % If the message is marked for instant delivery or is addressed to self and
+          % instant delivery is enabled.
+          % Note Instant is currently always true (assume all processes are local).
+          case (InstantDelivery orelse Recipient =:= self()) andalso Instant of
+            false -> Event;
+            true ->
+              #concuerror_info{timeout = Timeout} = Info,
+              TrapExit = Info#concuerror_info.flags#process_flags.trap_exit,
+              deliver_message(Event, MessageEvent, Timeout, {true, TrapExit})
+          end;
         true ->
-          #concuerror_info{timeout = Timeout} = Info,
-          TrapExit = Info#concuerror_info.flags#process_flags.trap_exit,
-          deliver_message(Event, MessageEvent, Timeout, {true, TrapExit})
+          #message_event{recipient = Recipient, message = #message{data = Message}} = MessageEvent,
+          Recipient ! Message, % Just blindly send for now, until we fix up receive to 
+          % be more reasonable about what it receives
+          Event
+          %#message_event{recipient = Recipient, data 
       end
   end.
 
@@ -1103,9 +1166,9 @@ process_top_loop(Info) ->
   ?debug_flag(?loop, top_waiting),
   receive
     reset -> process_top_loop(Info);
-    {start_prov, Module, Name, Args} ->
-      ?debug_flag(?loop, {start_prov, Module, Name, Args}),
-      put(concuerror_info, {instrument_only, Info#concuerror_info.modules}),
+    {start_instrument, Module, Name, Args} ->
+      ?debug_flag(?loop, {start_instrument, Module, Name, Args}),
+      put(concuerror_info, Info#concuerror_info{is_instrument_only=true}),
       concuerror_inspect:instrumented(call, [Module, Name, Args], start),
       exit(normal);
     {start, Module, Name, Args} ->
@@ -1147,6 +1210,10 @@ process_top_loop(Info) ->
       end
   end.
 
+new_process(#concuerror_info{is_instrument_only=true}=ParentInfo) ->
+  % Start a new process.
+  Info = ParentInfo#concuerror_info{notify_when_ready = {self(), true}},
+  spawn(fun() -> process_top_loop(Info) end);
 new_process(ParentInfo) ->
   % Start a new process.
   Info = ParentInfo#concuerror_info{notify_when_ready = {self(), true}},
@@ -1531,7 +1598,8 @@ reset_concuerror_info(Info) ->
      processes = Processes,
      report_unknown = ReportUnknown,
      scheduler = Scheduler,
-     timeout = Timeout
+     timeout = Timeout,
+     is_instrument_only = InstrumentOnly
     } = Info,
   #concuerror_info{
      after_timeout = AfterTimeout,
@@ -1545,7 +1613,8 @@ reset_concuerror_info(Info) ->
      processes = Processes,
      report_unknown = ReportUnknown,
      scheduler = Scheduler,
-     timeout = Timeout
+     timeout = Timeout,
+     is_instrument_only = InstrumentOnly
     }.
 
 %% reset_stack(#concuerror_info{stack = Stack} = Info) ->

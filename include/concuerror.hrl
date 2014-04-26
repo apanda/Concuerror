@@ -148,6 +148,8 @@
 -define(process_kind, 7).
 -define(process_match_name_to_pid(Name),
         {'$1',   '_', Name, '_', '_', '_', '_'}).
+-define(process_match_name_to_type(Name),
+        {'$2',   '_', Name, '_', '_', '_', '$1'}).
 %%------------------------------------------------------------------------------
 -type links() :: ets:tid().
 

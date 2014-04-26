@@ -66,13 +66,13 @@
 run(Options) ->
   case proplists:get_value(instrumented, Options) of
     true ->
-      provenance_only_run(Options);
+      run_instrumented(Options);
     false ->
       run_dpor(Options)
   end.
 
--spec provenance_only_run(options()) -> ok.
-provenance_only_run(Options) ->
+-spec run_instrumented(options()) -> ok.
+run_instrumented(Options) ->
   % Want to trap any exit signals (other than kill)
   process_flag(trap_exit, true),
   % Make sure erlang.beam is available somewhere
@@ -83,19 +83,19 @@ provenance_only_run(Options) ->
     false ->
       ok
   end,
-  [Target, Timeout, Logger] =
+  [Target, Logger] =
     get_properties(
-      [target, timeout, logger],
+      [target, logger],
       Options),
   ProcessOptions =
     [O || O <- Options, concuerror_options:filter_options('process', O)],
   ?debug(Logger, "Starting first process...~n",[]),
   FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions),
-  ok = concuerror_callback:start_prov_only_process(FirstProcess, Target, Timeout),
+  ok = concuerror_callback:start_instrument_only_process(FirstProcess, Target),
   ?time(Logger, "Exploration start"),
   receive
-      Msg ->
-          io:format("PPPP Scheduler exiting, having received ~p~n", [Msg])
+      {'EXIT', FirstProcess, Reason} ->
+          io:format("PPPP Scheduler exiting, having received ~p from ~p~n", [Reason, FirstProcess])
   end.
 
 -spec run_dpor(options()) -> ok.
@@ -486,11 +486,11 @@ remove_pending_message(#message_event{recipient = Recipient, sender = Sender},
   end.
 
 %%------------------------------------------------------------------------------
-actor_to_symbolic({A1, A2}, Processes) ->
-  {ets:lookup_element(Processes, A1, ?process_symbolic),
-   ets:lookup_element(Processes, A2, ?process_symbolic)};
-actor_to_symbolic(Actor, Processes) ->
-  ets:lookup_element(Processes, Actor, ?process_symbolic).
+%actor_to_symbolic({A1, A2}, Processes) ->
+  %{ets:lookup_element(Processes, A1, ?process_symbolic),
+   %ets:lookup_element(Processes, A2, ?process_symbolic)};
+%actor_to_symbolic(Actor, Processes) ->
+  %ets:lookup_element(Processes, Actor, ?process_symbolic).
 
 %project_provenance(_, _, []) ->
   %ok;
@@ -503,7 +503,7 @@ actor_to_symbolic(Actor, Processes) ->
   %project_provenance(Provenance, Processes, Later).
 
 plan_more_interleavings(State) ->
-  #scheduler_state{provenance = Provenance, processes=Processes, logger = Logger, trace = RevTrace} = State,
+  #scheduler_state{provenance = _Provenance, processes=_Processes, logger = Logger, trace = RevTrace} = State,
   ?time(Logger, "Assigning happens-before..."),
   % Reverse Early and Untimed late. Untimed late in this case is the set of events that
   % do not have a logical clock associated with them.
