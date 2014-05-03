@@ -101,6 +101,7 @@ run_instrumented(Options) ->
 -spec run_dpor(options()) -> ok.
 
 run_dpor(Options) ->
+  %io:format("In run_dpor~n"),
   % Want to trap any exit signals (other than kill)
   process_flag(trap_exit, true),
   % Make sure erlang.beam is available somewhere

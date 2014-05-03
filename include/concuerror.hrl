@@ -100,6 +100,7 @@
 %%------------------------------------------------------------------------------
 %% Scheduler's timeout
 -define(MINIMUM_TIMEOUT, 1000).
+-define(timeout_atom, conctimeoutafter).
 %%------------------------------------------------------------------------------
 -type message_info() :: ets:tid().
 % message_info: ID, pattern function, clock for sent, clock for delivered, 

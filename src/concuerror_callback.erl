@@ -180,9 +180,10 @@ instrumented(apply, [Fun, Args], Location, Info) ->
     false ->
       {doit, Info}
   end;
-instrumented('receive', [_PatternFun, _Timeout], _Location, #concuerror_info{is_instrument_only=true}=Info) ->
+instrumented('receive', [_PatternFun, _Timeout, _ActionFun, _], 
+             _Location, #concuerror_info{is_instrument_only=true}=Info) ->
   {doit, Info};
-instrumented('receive', [PatternFun, Timeout], Location, Info) ->
+instrumented('receive', [PatternFun, Timeout, ActionFun, _], Location, Info) ->
   case Info of
     #concuerror_info{after_timeout = AfterTimeout} ->
       RealTimeout =
@@ -191,7 +192,7 @@ instrumented('receive', [PatternFun, Timeout], Location, Info) ->
           true -> infinity
         end,
       % Receives are handled differently
-      handle_receive(PatternFun, RealTimeout, Location, Info);
+      handle_receive(PatternFun, RealTimeout, ActionFun, Location, Info);
     _Logger ->
       {doit, Info}
   end.
@@ -1034,7 +1035,7 @@ collect_deadlock_info(ActiveProcesses) ->
 
 %%------------------------------------------------------------------------------
 
-handle_receive(PatternFun, Timeout, Location, Info) ->
+handle_receive(PatternFun, Timeout, _ActionFun, Location, Info) ->
   %% No distinction between replaying/new as we have to clear the message from
   %% the queue anyway...
   {MessageOrAfter, ReceiveInfo} =
@@ -1058,11 +1059,13 @@ handle_receive(PatternFun, Timeout, Location, Info) ->
     end,
   Notification =
     NextEvent#event{event_info = ReceiveEvent, special = Special},
-  case CreateMessage of
+  _Res = case CreateMessage of
     {ok, D} ->
       ?debug_flag(?receive_, {deliver, D}),
       self() ! D;
-    false -> ok
+      %ActionFun(D);
+    false -> ok 
+        %ActionFun(?timeout_atom)
   end,
   {skip_timeout, notify(Notification, UpdatedInfo)}.
 

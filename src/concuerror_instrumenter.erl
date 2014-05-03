@@ -50,33 +50,39 @@ mapfold(Tree, {Instrumented, Var}) ->
             inspect(call, [Module, Name, cerl:make_list(Args)], Tree)
         end;
       'receive' ->
-        Clauses = cerl:receive_clauses(Tree),
+        %io:format("Instrumenting receive ~n"),
+        %Clauses = cerl:receive_clauses(Tree),
         Timeout = cerl:receive_timeout(Tree),
-        Action = cerl:receive_action(Tree),
+        % Action here is really what is done for the after clause.
+        %Action = cerl:receive_action(Tree),
         Fun = receive_matching_fun(Tree),
+        ReceiveAction = receive_case_statement(Tree, Var),
         % Step 1: Call ?inspect:instrumented with the match function and timeout
         % to see what succeeds.
-        Call = inspect('receive', [Fun, Timeout], Tree),
-        case Timeout =:= cerl:c_atom(infinity) of
-          false ->
-            %% Replace original timeout with a fresh variable to make it
-            %% skippable on demand.
-            TimeoutVar = cerl:c_var(Var),
-            RecTree = cerl:update_c_receive(Tree, Clauses, TimeoutVar, Action),
-            % Now make it so Step 1 is called before actual receive, and timeout can be skipped.
-            cerl:update_tree(Tree, 'let', [[TimeoutVar], [Call], [RecTree]]);
-          true ->
-            %% Leave infinity timeouts unaffected, as the default code generated
-            %% by the compiler does not bind any additional variables in the
-            %% after clause.
-            % Now make it so Step 1 is called before actual receive.
-            cerl:update_tree(Tree, seq, [[Call], [Tree]])
-        end;
+        % apanda: OK, so now we instead just call inspect with 2 functions and hope
+        % this works
+        inspect('receive', [Fun, Timeout, receive_original(Tree, Var), receive_original(Tree, Var + 1)], Tree);
+        %io:format("Receive as a case statement ~p~n", [receive_case_statement(Tree)]),
+        %case Timeout =:= cerl:c_atom(infinity) of
+          %false ->
+            %%% Replace original timeout with a fresh variable to make it
+            %%% skippable on demand.
+            %TimeoutVar = cerl:c_var(Var),
+            %RecTree = cerl:update_c_receive(Tree, Clauses, TimeoutVar, Action),
+            %% Now make it so Step 1 is called before actual receive, and timeout can be skipped.
+            %cerl:update_tree(Tree, 'let', [[TimeoutVar], [Call], [RecTree]]);
+          %true ->
+            %%% Leave infinity timeouts unaffected, as the default code generated
+            %%% by the compiler does not bind any additional variables in the
+            %%% after clause.
+            %% Now make it so Step 1 is called before actual receive.
+            %cerl:update_tree(Tree, seq, [[Call], [Tree]])
+        %end;
       _ -> Tree
     end,
   NewVar =
     case Type of
-      'receive' -> Var + 1;
+      'receive' -> Var + 2;
       _ -> Var
     end,
   {NewTree, {Instrumented, NewVar}}.
@@ -89,6 +95,29 @@ inspect(Tag, Args, Tree) ->
                     [cerl:c_atom(instrumented)],
                     [CTag, CArgs, cerl:abstract(cerl:get_ann(Tree))]]).
 
+% apanda: Sometimes we just need the original
+receive_original(InTree, Var) ->
+  ToVar = cerl:c_var(Var),
+  Tree = case cerl:receive_timeout(InTree) =:= cerl:c_atom(infinity) of
+    false ->
+      cerl:update_c_receive(InTree,
+                           cerl:receive_clauses(InTree),
+                           ToVar,
+                           cerl:receive_action(InTree));
+    true -> InTree
+  end,
+  cerl:update_tree(Tree, 'fun', [[ToVar], [Tree]]).
+% apanda: Generate a function which receives messages etc.
+receive_case_statement(Tree, Var) ->
+  Msg = cerl:c_var(Var),
+  ClausesNoAfter = cerl:receive_clauses(Tree),
+  After = cerl:receive_action(Tree),
+  AfterGuard = cerl:c_atom(true),
+  AfterAtom = cerl:c_atom(?timeout_atom), 
+  Clauses = lists:append([ClausesNoAfter, [cerl:c_clause(AfterAtom, AfterGuard, After)]]),
+  CaseStatement = cerl:update_tree(Tree, 'case', [[Msg], Clauses]),
+  cerl:update_tree(Tree, 'fun', [[Msg], [CaseStatement]]).
+
 receive_matching_fun(Tree) ->
   Msg = cerl:c_var(message),
   Clauses = extract_patterns(cerl:receive_clauses(Tree)),
@@ -97,12 +126,14 @@ receive_matching_fun(Tree) ->
 
 extract_patterns(Clauses) ->
   extract_patterns(Clauses, []).
-
+% At the end just add an extra one for the case where none of the
+% clauses are matched so we return false
 extract_patterns([], Acc) ->
   Pat = [cerl:c_var(message)],
   Guard = cerl:c_atom(true),
   Body = cerl:c_atom(false),
   lists:reverse([cerl:c_clause(Pat, Guard, Body)|Acc]);
+% Extracting clause patterns starts by replacing all bodys with true
 extract_patterns([Tree|Rest], Acc) ->
   Body = cerl:c_atom(true),
   Pats = cerl:clause_pats(Tree),

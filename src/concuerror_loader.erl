@@ -31,7 +31,7 @@ load(Module, Instrumented, Report) ->
             {F, F}
         end,
       try_report(Report, Module, Instrumented),
-      catch load_binary(Module, Filename, Beam, Instrumented),
+      load_binary(Module, Filename, Beam, Instrumented),
       maybe_instrumenting_myself(Module, Instrumented, Report);
     [{Module, false}] when Report ->
       try_report(Report, Module, Instrumented);
@@ -63,8 +63,13 @@ load_binary(Module, Filename, Beam, Instrumented) ->
         true = ets:insert(Instrumented, {{current}, Module}),
         concuerror_instrumenter:instrument(Core, Instrumented)
     end,
-  {ok, _, NewBinary} =
-    compile:forms(InstrumentedCore, [from_core, report_errors, binary]),
+  Ret =  compile:forms(InstrumentedCore, [from_core, report_errors, binary]),
+  case Ret of
+    {ok, _, _} -> ok;
+    error -> io:format("Compile error for ~p~n", [Module]);
+    {error, _Errors, _} -> io:format("Compile error for ~p~n", [Module])
+  end,
+  {ok, _, NewBinary} = Ret,
   {module, Module} = code:load_binary(Module, Filename, NewBinary),
   ok.
 
