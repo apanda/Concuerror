@@ -61,7 +61,7 @@ mapfold(Tree, {Instrumented, Var}) ->
         % to see what succeeds.
         % apanda: OK, so now we instead just call inspect with 2 functions and hope
         % this works
-        inspect('receive', [Fun, Timeout, receive_original(Tree, Var), receive_original(Tree, Var + 1)], Tree);
+        inspect('receive', [Fun, Timeout, ReceiveAction, receive_original(Tree, Var + 1)], Tree);
         %io:format("Receive as a case statement ~p~n", [receive_case_statement(Tree)]),
         %case Timeout =:= cerl:c_atom(infinity) of
           %false ->
@@ -107,6 +107,7 @@ receive_original(InTree, Var) ->
     true -> InTree
   end,
   cerl:update_tree(Tree, 'fun', [[ToVar], [Tree]]).
+
 % apanda: Generate a function which receives messages etc.
 receive_case_statement(Tree, Var) ->
   Msg = cerl:c_var(Var),
@@ -114,7 +115,12 @@ receive_case_statement(Tree, Var) ->
   After = cerl:receive_action(Tree),
   AfterGuard = cerl:c_atom(true),
   AfterAtom = cerl:c_atom(?timeout_atom), 
-  Clauses = lists:append([ClausesNoAfter, [cerl:c_clause(AfterAtom, AfterGuard, After)]]),
+  Clauses = case cerl:receive_timeout(Tree) =:= cerl:c_atom(infinity) of
+    false ->
+      lists:append([ClausesNoAfter, [cerl:c_clause([AfterAtom], AfterGuard, After)]]);
+    true->
+      ClausesNoAfter
+  end,
   CaseStatement = cerl:update_tree(Tree, 'case', [[Msg], Clauses]),
   cerl:update_tree(Tree, 'fun', [[Msg], [CaseStatement]]).
 
