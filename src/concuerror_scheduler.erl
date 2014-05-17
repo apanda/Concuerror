@@ -87,11 +87,10 @@ message_gather(Logger, Q) ->
       Sched ! {msgs, Q}
   end.
 
-print_events([Event | Rest]) ->
-  concuerror_printer:pretty(standard_io, Event, -1),
-  print_events(Rest);
-print_events([]) ->
-  ok.
+print_events(Dev, Events) ->
+  Encoded = bert:encode(Events),
+  ok = file:write(Dev, Encoded),
+  ok = file:close(Dev).
 
 -spec run_instrumented(options()) -> ok.
 run_instrumented(Options) ->
@@ -105,9 +104,9 @@ run_instrumented(Options) ->
     false ->
       ok
   end,
-  [Target, Logger] =
+  [Target, Logger, {Provenance, ProvenanceName}] =
     get_properties(
-      [target, logger],
+      [target, logger, provenance],
       Options),
   ProcessOptions =
     [O || O <- Options, concuerror_options:filter_options('process', O)],
@@ -125,7 +124,9 @@ run_instrumented(Options) ->
       {msgs, Q} -> Q
   end,
   io:format("This run involved ~p messages ~n", [queue:len(Messages)]),
-  print_events(queue:to_list(Messages)),
+  file:close(Provenance), 
+  {ok, Dev} = file:open(ProvenanceName, [write, raw, delayed_write]), 
+  print_events(Dev, queue:to_list(Messages)),
   io:format("Done about to return~n").
 
 -spec run_dpor(options()) -> ok.

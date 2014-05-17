@@ -6,7 +6,8 @@ main(Args) ->
   ScriptDir = filename:dirname(escript:script_name()),
   EbinDir = filename:join([ScriptDir,"ebin"]),
   GetoptDir = filename:join([ScriptDir,"deps","getopt","ebin"]),
-  ok = code:add_pathsa([EbinDir, GetoptDir]),
+  BertDir = filename:join([ScriptDir,"deps","bert.erl","ebin"]),
+  ok = code:add_pathsa([EbinDir, GetoptDir, BertDir]),
   {module, concuerror_inspect} = code:load_file(concuerror_inspect),
   case concuerror_options:parse_cl(Args) of
     {exit, Exit} -> cl_exit(Exit);

@@ -45,6 +45,7 @@ instrumented_recv(Msg, PatternFun, Timeout) ->
   #concuerror_info{is_instrument_only=true, 
                    logger=Logger,
                    scheduler=Sched,
+                   flags = #process_flags{trap_exit = Trapping},
                    event=Event}=Info,
   ?debug(Logger, "~p Received message ~p notifying ~p~n", [self(), Msg, Sched]),
   Message = #message{data=Msg},
@@ -52,7 +53,7 @@ instrumented_recv(Msg, PatternFun, Timeout) ->
        message = Message,
        patterns = PatternFun,
        timeout = Timeout,
-       trapping = false},
+       trapping = Trapping},
   % special is blank since I don't know what the message ID is here. Patch this up later
   % to include message ID
   NewEvent = Event#event{event_info = ReceiveEvent, special = []},
@@ -66,13 +67,14 @@ instrumented_after(PatternFun, Timeout) ->
   #concuerror_info{is_instrument_only=true, 
                    logger=Logger,
                    scheduler=Sched,
+                   flags = #process_flags{trap_exit = Trapping},
                    event=Event}=Info,
   ?debug(Logger, "~p After notifying ~p~n", [self(), Sched]),
   ReceiveEvent = #receive_event{
        message = 'after',
        patterns = PatternFun,
        timeout = Timeout,
-       trapping = false},
+       trapping = Trapping},
   % special is blank since I don't know what the message ID is here. Patch this up later
   % to include message ID
   NewEvent = Event#event{event_info = ReceiveEvent, special = []},
