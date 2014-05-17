@@ -53,7 +53,7 @@ mapfold(Tree, {Instrumented, Var}) ->
         Timeout = cerl:receive_timeout(Tree),
         % Action here is really what is done for the after clause.
         Fun = receive_matching_fun(Tree),
-        ReceiveAction = receive_case_statement(Tree, Var),
+        ReceiveAction = receive_case_statement(Tree, Fun, Timeout),
         % Step 1: Call ?inspect:instrumented with the match function and timeout
         % to see what succeeds.
         % apanda: OK, so now we instead just call inspect with 2 functions and hope
@@ -90,22 +90,46 @@ receive_original(InTree) ->
   cerl:update_tree(Tree, 'fun', [[ToVar], [Tree]]).
 
 % apanda: Generate a function which receives messages etc.
-receive_case_statement(Tree, Var) ->
-  Msg = cerl:c_var(Var),
-  Info = cerl:c_var(info),
-  ClausesNoAfter = cerl:receive_clauses(Tree),
-  After = cerl:receive_action(Tree),
-  AfterGuard = cerl:c_atom(true),
-  AfterAtom = cerl:c_atom(?timeout_atom), 
-  Clauses = case cerl:receive_timeout(Tree) =:= cerl:c_atom(infinity) of
+modify_receive_clause(Clause, MatchFun, Timeout) ->
+  Pats = cerl:clause_pats(Clause),
+  Guard = cerl:clause_guard(Clause),
+  Body = cerl:clause_body(Clause),
+  % Poor man's assertion, number of patterns in clause are 1
+  1 = length(Pats),
+  [PatBody] = Pats,
+  CallToRecord = cerl:update_tree(Clause, call,
+                                  [[cerl:c_atom(?inspect)],
+                                   [cerl:c_atom(instrumented_recv)],
+                                   [PatBody, MatchFun, Timeout]]),
+  FinalBody = cerl:update_tree(Clause, seq, [[CallToRecord], [Body]]),
+  cerl:update_c_clause(Clause, Pats, Guard, FinalBody).
+
+receive_case_statement(InTree, MatchFun, Timeout) ->
+  OriginalClauses = cerl:receive_clauses(InTree),
+  Clauses = lists:map(fun (C) -> 
+                              modify_receive_clause(C, MatchFun, Timeout)
+                      end, 
+                      OriginalClauses), 
+  Tree = 
+  case cerl:receive_timeout(InTree) =:= cerl:c_atom(infinity) of
+    true ->
+      cerl:update_c_receive(InTree,
+                 Clauses,
+                 cerl:receive_timeout(InTree),
+                 cerl:receive_action(InTree));
     false ->
-      lists:append([ClausesNoAfter, [cerl:c_clause([AfterAtom], AfterGuard, After)]]);
-    true->
-      ClausesNoAfter
+      AfterBody = cerl:receive_action(InTree),
+      CallToRecordAfter = cerl:update_tree(AfterBody, call,
+                                           [[cerl:c_atom(?inspect)],
+                                            [cerl:c_atom(instrumented_after)],
+                                            [MatchFun, Timeout]]),
+      NewAfterBody = cerl:update_tree(AfterBody, seq, [[CallToRecordAfter], [AfterBody]]),
+      cerl:update_c_receive(InTree,
+                 Clauses,
+                 cerl:receive_timeout(InTree),
+                 NewAfterBody)
   end,
-  CaseStatement = cerl:update_tree(Tree, 'case', [[Msg], Clauses]),
-  cerl:update_tree(Tree, 'fun', [[Msg, Info], [CaseStatement]]).
-  %cerl:update_tree(Tree, 'fun', [[Msg], [CaseStatement]]).
+  cerl:update_tree(Tree, 'fun', [[], [Tree]]).
 
 receive_matching_fun(Tree) ->
   Msg = cerl:c_var(message),

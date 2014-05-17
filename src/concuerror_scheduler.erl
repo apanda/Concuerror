@@ -71,6 +71,28 @@ run(Options) ->
       run_dpor(Options)
   end.
 
+message_gather(Logger, Q) ->
+  receive
+    exited ->
+      io:format("Exited report~n"),
+      false = true;
+    {'EXIT', X, What} ->
+      io:format("EXIT ~p ~p~n", [X, What]),
+      false = true;
+    #event{} = NewEvent ->
+        message_gather(Logger, queue:in(NewEvent, Q));
+    {quit, Sched} ->
+      ?debug(Logger, "About to send notification queue over, total message length is~p ~n",
+                [process_info(self(), message_queue_len)]),
+      Sched ! {msgs, Q}
+  end.
+
+print_events([Event | Rest]) ->
+  concuerror_printer:pretty(standard_io, Event, -1),
+  print_events(Rest);
+print_events([]) ->
+  ok.
+
 -spec run_instrumented(options()) -> ok.
 run_instrumented(Options) ->
   % Want to trap any exit signals (other than kill)
@@ -89,14 +111,22 @@ run_instrumented(Options) ->
       Options),
   ProcessOptions =
     [O || O <- Options, concuerror_options:filter_options('process', O)],
+  GatherPid = spawn_link(fun() -> message_gather(Logger, queue:new()) end),
   ?debug(Logger, "Starting first process...~n",[]),
-  FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions),
+  FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions, GatherPid),
   ok = concuerror_callback:start_instrument_only_process(FirstProcess, Target),
   ?time(Logger, "Exploration start"),
   receive
       {'EXIT', FirstProcess, Reason} ->
           io:format("PPPP Scheduler exiting, having received ~p from ~p~n", [Reason, FirstProcess])
-  end.
+  end,
+  GatherPid ! {quit, self()},
+  Messages = receive 
+      {msgs, Q} -> Q
+  end,
+  io:format("This run involved ~p messages ~n", [queue:len(Messages)]),
+  print_events(queue:to_list(Messages)),
+  io:format("Done about to return~n").
 
 -spec run_dpor(options()) -> ok.
 
@@ -513,6 +543,7 @@ plan_more_interleavings(State) ->
   {RevEarly, UntimedLate} = split_trace(RevTrace),
   % Assign timings to the untimed bit. Late is in chronological order.
   Late = assign_happens_before(UntimedLate, RevEarly, State),
+  ?time(Logger, "Done assigning happens-before..."),
   % At this point RevEarly is reversed. lists:reverse(RevEarly, Late) returns chronological order.
   ChronoTrace = lists:reverse(RevEarly, Late),
   %io:format(Provenance, "-------------------------------------------------------------------------------~n", []),

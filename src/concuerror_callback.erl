@@ -6,7 +6,7 @@
 -export([instrumented_top/4]).
 
 %% Interface to scheduler:
--export([spawn_first_process/1, start_first_process/3, start_instrument_only_process/2, 
+-export([spawn_first_process/2, spawn_first_process/1, start_first_process/3, start_instrument_only_process/2, 
          deliver_message/3, wait_actor_reply/2, collect_deadlock_info/1]).
 
 %% Interface for resetting:
@@ -51,6 +51,11 @@
 -spec spawn_first_process(options()) -> pid().
 
 spawn_first_process(Options) ->
+  spawn_first_process(Options, self()).
+
+-spec spawn_first_process(options(), pid()) -> pid().
+
+spawn_first_process(Options, Sched) ->
   [AfterTimeout, InstantDelivery, Logger, Modules, Processes,
    ReportUnknown, Timeout] =
     concuerror_common:get_properties(
@@ -70,7 +75,7 @@ spawn_first_process(Options) ->
        monitors       = ets:new(monitors, [bag, public]),
        processes      = Processes,
        report_unknown = ReportUnknown,
-       scheduler      = self(),
+       scheduler      = Sched,
        timeout        = Timeout
       },
   system_processes_wrappers(Info),
@@ -103,7 +108,8 @@ start_instrument_only_process(Pid, {Module, Name, Args}) ->
                           'doit' |
                           {'didit', term()} |
                           {'error', term()} |
-                          'skip_timeout'.
+                          'skip_timeout'|
+                          'instrumented_recv'.
 
 instrumented_top(Tag, Args, Location, #concuerror_info{is_instrument_only=true} = Info) ->
   {Result, NewInfo} = instrumented(Tag, Args, Location, Info),
@@ -148,9 +154,12 @@ instrumented(apply, [Fun, Args], Location, Info) ->
     false ->
       {doit, Info}
   end;
-instrumented('receive', [_PatternFun, _Timeout, _ActionFun, _], 
+instrumented('receive', [_PatternFun, _, _, _], 
              _Location, #concuerror_info{is_instrument_only=true}=Info) ->
-  {doit, Info};
+   %io:format("~p receive action~n", [self()]),
+   FakeEvent = #event{actor = self(),
+                  label = make_ref()},
+   {instrumented_recv, Info#concuerror_info{event=FakeEvent}};
 instrumented('receive', [PatternFun, Timeout, ActionFun, _], Location, Info) ->
   case Info of
     #concuerror_info{after_timeout = AfterTimeout} ->
@@ -272,11 +281,7 @@ built_in(Module, Name, Arity, Args, Location, #concuerror_info{is_instrument_onl
         },
     % Notify scheduler of event.
     Notification = Event#event{event_info = EventInfo},
-    NewInfo = 
-      case InstrumentOnly of
-        true ->  UpdatedInfo;
-        false -> notify(Notification, UpdatedInfo)
-      end,
+    NewInfo = notify(Notification, UpdatedInfo),
     {{didit, Value}, NewInfo}
   catch
     throw:Reason ->
@@ -1006,7 +1011,7 @@ collect_deadlock_info(ActiveProcesses) ->
 
 %%------------------------------------------------------------------------------
 
-handle_receive(PatternFun, Timeout, ActionFun, Location, Info) ->
+handle_receive(PatternFun, Timeout, _ActionFun, Location, Info) ->
   %% No distinction between replaying/new as we have to clear the message from
   %% the queue anyway...
   %io:format("~p In handle_receive~n", [self()]),
