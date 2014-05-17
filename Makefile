@@ -54,7 +54,7 @@ vpath %.erl src
 
 .PHONY: compile clean dialyze test submodules
 
-compile: $(MODULES:%=ebin/%.beam) getopt concuerror
+compile: $(MODULES:%=ebin/%.beam) bert getopt concuerror
 
 -include $(MODULES:%=ebin/%.Pbeam)
 
@@ -72,6 +72,9 @@ concuerror:
 
 getopt: submodules
 	make -C deps/getopt
+
+bert: submodules
+	make -C deps/bert.erl
 
 submodules:
 	git submodule update --init

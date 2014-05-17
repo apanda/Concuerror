@@ -1,3 +1,6 @@
 [submodule "deps/getopt"]
 	path = deps/getopt
 	url = https://github.com/jcomellas/getopt.git
+[submodule "deps/bert.erl"]
+	path = deps/bert.erl
+	url = git@github.com:apanda/bert.erl.git
