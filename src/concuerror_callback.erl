@@ -47,40 +47,6 @@
 
 -include("concuerror.hrl").
 
--record(process_flags, {
-          trap_exit = false  :: boolean(),
-          priority  = normal :: 'low' | 'normal' | 'high' | 'max'
-         }).
-
--record(concuerror_info, {
-          after_timeout              :: infinite | integer(),
-          caught_signal = false      :: boolean(),
-          escaped_pdict = []         :: term(),
-          ets_tables                 :: ets_tables(),
-          exit_reason = normal       :: term(),
-          extra                      :: term(),
-          flags = #process_flags{}   :: #process_flags{},
-          instant_delivery = false   :: boolean(),
-          links                      :: links(),
-          logger                     :: pid(),
-          messages_new = queue:new() :: queue:queue(message()),
-          messages_old = queue:new() :: queue:queue(message()),
-          modules                    :: modules(),
-          monitors                   :: monitors(),
-          event = none               :: 'none' | event(),
-          notify_when_ready          :: {pid(), boolean()},
-          processes                  :: processes(),
-          report_unknown = false     :: boolean(),
-          scheduler                  :: pid(),
-          stacktop = 'none'          :: 'none' | tuple(),
-          status = running           :: 'exited'| 'exiting' | 'running' | 'waiting',
-          timeout                    :: timeout(),
-          is_instrument_only = false :: boolean()
-         }).
-
--type concuerror_info() :: #concuerror_info{}.
-
-%%------------------------------------------------------------------------------
 
 -spec spawn_first_process(options()) -> pid().
 
@@ -144,6 +110,7 @@ instrumented_top(Tag, Args, Location, #concuerror_info{is_instrument_only=true} 
   put(concuerror_info, NewInfo),
   Result;
 instrumented_top(Tag, Args, Location, #concuerror_info{} = Info) ->
+  %io:format("Calling ~p ~p ~p ~p~n", [self(), Tag, Args, Location]),
   % Process dictionary
   #concuerror_info{escaped_pdict = Escaped} = Info,
   % Put process dictionary in current environment
@@ -151,6 +118,7 @@ instrumented_top(Tag, Args, Location, #concuerror_info{} = Info) ->
   % Call instrumented
   {Result, #concuerror_info{} = NewInfo} =
     instrumented(Tag, Args, Location, Info),
+  %io:format("Returned ~p ~p ~p ~p~n", [self(), Tag, Args, Location]),
   % On return erase process dictionary store it.
   NewEscaped = erase(),
   % Compute new Concuerror information
@@ -1007,7 +975,8 @@ find_system_reply(System, [_|Special]) ->
                           'exited' | 'retry' | {'ok', event()}.
 
 wait_actor_reply(Event, Timeout) ->
-  receive
+  %io:format("Waiting ~n"),
+  Resp = receive
     exited -> exited;
     {blocked, _} ->  retry;
     #event{} = NewEvent -> {ok, NewEvent};
@@ -1017,7 +986,9 @@ wait_actor_reply(Event, Timeout) ->
       exit(What)
   after
     Timeout -> ?crash({process_did_not_respond, Timeout, Event#event.actor})
-  end.
+  end,
+  %io:format("Received ~p~n", [Resp]),
+  Resp.
 
 %%------------------------------------------------------------------------------
 
@@ -1035,11 +1006,13 @@ collect_deadlock_info(ActiveProcesses) ->
 
 %%------------------------------------------------------------------------------
 
-handle_receive(PatternFun, Timeout, _ActionFun, Location, Info) ->
+handle_receive(PatternFun, Timeout, ActionFun, Location, Info) ->
   %% No distinction between replaying/new as we have to clear the message from
   %% the queue anyway...
+  %io:format("~p In handle_receive~n", [self()]),
   {MessageOrAfter, ReceiveInfo} =
     has_matching_or_after(PatternFun, Timeout, Location, Info, blocking),
+  %io:format("~p has_matching_or_after returns~n", [self()]),
   #concuerror_info{
      event = NextEvent,
      flags = #process_flags{trap_exit = Trapping}
@@ -1059,15 +1032,19 @@ handle_receive(PatternFun, Timeout, _ActionFun, Location, Info) ->
     end,
   Notification =
     NextEvent#event{event_info = ReceiveEvent, special = Special},
-  _Res = case CreateMessage of
+  %io:format("~p About to call ActionFun with ~p~n", [self(), CreateMessage]),
+  case CreateMessage of
     {ok, D} ->
       ?debug_flag(?receive_, {deliver, D}),
+      %io:format("Going to try calling ActionFun to see what happens with msg ~p~n", [D]),
+      %ActionFun(D),
+      %io:format("Action function returned~n"),
       self() ! D;
-      %ActionFun(D);
-    false -> ok 
-        %ActionFun(?timeout_atom)
+      %io:format("Message to deliver~n"),
+    false -> ok
   end,
   {skip_timeout, notify(Notification, UpdatedInfo)}.
+  %{{didit, Res}, FinalInfo}. 
 
 has_matching_or_after(PatternFun, Timeout, Location, InfoIn, Mode) ->
   {Result, NewOldMessages} = has_matching_or_after(PatternFun, Timeout, InfoIn),

@@ -326,3 +326,40 @@
                     {internal_name2native, 1}
                    ]]
        ).
+%%----------------------------------------------------------------
+%% Callback stuff
+%%---------------------------------------------------------------
+-record(process_flags, {
+          trap_exit = false  :: boolean(),
+          priority  = normal :: 'low' | 'normal' | 'high' | 'max'
+         }).
+
+-record(concuerror_info, {
+          after_timeout              :: infinite | integer(),
+          caught_signal = false      :: boolean(),
+          escaped_pdict = []         :: term(),
+          ets_tables                 :: ets_tables(),
+          exit_reason = normal       :: term(),
+          extra                      :: term(),
+          flags = #process_flags{}   :: #process_flags{},
+          instant_delivery = false   :: boolean(),
+          links                      :: links(),
+          logger                     :: pid(),
+          messages_new = queue:new() :: queue:queue(message()),
+          messages_old = queue:new() :: queue:queue(message()),
+          modules                    :: modules(),
+          monitors                   :: monitors(),
+          event = none               :: 'none' | event(),
+          notify_when_ready          :: {pid(), boolean()},
+          processes                  :: processes(),
+          report_unknown = false     :: boolean(),
+          scheduler                  :: pid(),
+          stacktop = 'none'          :: 'none' | tuple(),
+          status = running           :: 'exited'| 'exiting' | 'running' | 'waiting',
+          timeout                    :: timeout(),
+          is_instrument_only = false :: boolean()
+         }).
+
+-type concuerror_info() :: #concuerror_info{}.
+
+%%------------------------------------------------------------------------------

@@ -124,7 +124,8 @@ loop_entry(State) ->
 
 loop(State) ->
   receive
-    Message when Message =/= tick -> loop(Message, State)
+    Message when Message =/= tick -> 
+          loop(Message, State)
   end.
 
 loop(Message, State) ->

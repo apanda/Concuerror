@@ -173,7 +173,9 @@ explore(#scheduler_state{logger = Logger} = State) ->
       ?trace(Logger, "                     Starting New Exploration                               ~n", []),
       ?trace(Logger, "============================================================================~n", []),
       RacesDetectedState = plan_more_interleavings(UpdatedState),
+      ?trace(Logger, "Done planning interleavings~n", []),
       LogState = log_trace(RacesDetectedState),
+      ?trace(Logger, "Logged this info~n", []),
       {HasMore, NewState} = has_more_to_explore(LogState),
       case HasMore of
         true -> explore(NewState);

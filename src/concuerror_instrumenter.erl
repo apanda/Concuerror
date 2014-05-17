@@ -50,34 +50,15 @@ mapfold(Tree, {Instrumented, Var}) ->
             inspect(call, [Module, Name, cerl:make_list(Args)], Tree)
         end;
       'receive' ->
-        %io:format("Instrumenting receive ~n"),
-        %Clauses = cerl:receive_clauses(Tree),
         Timeout = cerl:receive_timeout(Tree),
         % Action here is really what is done for the after clause.
-        %Action = cerl:receive_action(Tree),
         Fun = receive_matching_fun(Tree),
         ReceiveAction = receive_case_statement(Tree, Var),
         % Step 1: Call ?inspect:instrumented with the match function and timeout
         % to see what succeeds.
         % apanda: OK, so now we instead just call inspect with 2 functions and hope
         % this works
-        inspect('receive', [Fun, Timeout, ReceiveAction, receive_original(Tree, Var + 1)], Tree);
-        %io:format("Receive as a case statement ~p~n", [receive_case_statement(Tree)]),
-        %case Timeout =:= cerl:c_atom(infinity) of
-          %false ->
-            %%% Replace original timeout with a fresh variable to make it
-            %%% skippable on demand.
-            %TimeoutVar = cerl:c_var(Var),
-            %RecTree = cerl:update_c_receive(Tree, Clauses, TimeoutVar, Action),
-            %% Now make it so Step 1 is called before actual receive, and timeout can be skipped.
-            %cerl:update_tree(Tree, 'let', [[TimeoutVar], [Call], [RecTree]]);
-          %true ->
-            %%% Leave infinity timeouts unaffected, as the default code generated
-            %%% by the compiler does not bind any additional variables in the
-            %%% after clause.
-            %% Now make it so Step 1 is called before actual receive.
-            %cerl:update_tree(Tree, seq, [[Call], [Tree]])
-        %end;
+        inspect('receive', [Fun, Timeout, ReceiveAction, receive_original(Tree)], Tree);
       _ -> Tree
     end,
   NewVar =
@@ -96,8 +77,8 @@ inspect(Tag, Args, Tree) ->
                     [CTag, CArgs, cerl:abstract(cerl:get_ann(Tree))]]).
 
 % apanda: Sometimes we just need the original
-receive_original(InTree, Var) ->
-  ToVar = cerl:c_var(Var),
+receive_original(InTree) ->
+  ToVar = cerl:c_var(timeout),
   Tree = case cerl:receive_timeout(InTree) =:= cerl:c_atom(infinity) of
     false ->
       cerl:update_c_receive(InTree,
@@ -111,6 +92,7 @@ receive_original(InTree, Var) ->
 % apanda: Generate a function which receives messages etc.
 receive_case_statement(Tree, Var) ->
   Msg = cerl:c_var(Var),
+  Info = cerl:c_var(info),
   ClausesNoAfter = cerl:receive_clauses(Tree),
   After = cerl:receive_action(Tree),
   AfterGuard = cerl:c_atom(true),
@@ -122,7 +104,8 @@ receive_case_statement(Tree, Var) ->
       ClausesNoAfter
   end,
   CaseStatement = cerl:update_tree(Tree, 'case', [[Msg], Clauses]),
-  cerl:update_tree(Tree, 'fun', [[Msg], [CaseStatement]]).
+  cerl:update_tree(Tree, 'fun', [[Msg, Info], [CaseStatement]]).
+  %cerl:update_tree(Tree, 'fun', [[Msg], [CaseStatement]]).
 
 receive_matching_fun(Tree) ->
   Msg = cerl:c_var(message),
