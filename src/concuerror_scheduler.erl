@@ -71,6 +71,7 @@ run(Options) ->
       run_dpor(Options)
   end.
 
+
 message_gather(Logger, Q) ->
   receive
     exited ->
@@ -86,11 +87,6 @@ message_gather(Logger, Q) ->
                 [process_info(self(), message_queue_len)]),
       Sched ! {msgs, Q}
   end.
-
-print_events(Dev, Events) ->
-  Encoded = bert:encode(Events),
-  ok = file:write(Dev, Encoded),
-  ok = file:close(Dev).
 
 -spec run_instrumented(options()) -> ok.
 run_instrumented(Options) ->
@@ -123,10 +119,16 @@ run_instrumented(Options) ->
   Messages = receive 
       {msgs, Q} -> Q
   end,
-  io:format("This run involved ~p messages ~n", [queue:len(Messages)]),
+  io:format("This run involved ~p events ~n", [queue:len(Messages)]),
+  SentMessages = queue:filter(fun concuerror_hb:sent_message_filter/1, Messages),
+  io:format("This run had ~p sent messages~n", [queue:len(SentMessages)]),
+  io:format("Start assigning happens before~n"),
+  HBMessages = concuerror_hb:assign_msg_hb(Messages, SentMessages),
+  AnnotatedMessages = concuerror_hb:assign_potential_links(HBMessages, SentMessages),
+  io:format("Done assigning happens before~n"),
   file:close(Provenance), 
   {ok, Dev} = file:open(ProvenanceName, [write, raw, delayed_write]), 
-  print_events(Dev, queue:to_list(Messages)),
+  concuerror_hb:print_events(Dev, queue:to_list(AnnotatedMessages)),
   io:format("Done about to return~n").
 
 -spec run_dpor(options()) -> ok.
