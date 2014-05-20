@@ -20,9 +20,9 @@ message_from_sent(#event{special = Special}) ->
 
 match_received_to_sent(Event = #event{
                          event_info=#receive_event{
-                           message=#message{data=Body},
+                           message=#message{data=Body}=Message,
                            recipient=Receiver,
-                           patterns=PatFun}},
+                           patterns=PatFun} = RecEvent},
                        SentMessages,
                        Acc) ->
   case queue:len(SentMessages) of
@@ -31,7 +31,9 @@ match_received_to_sent(Event = #event{
          {Destination, SendBody, ID} = message_from_sent(Sent),
          case Destination =:= Receiver andalso Body =:= SendBody of
            true ->
-            NewEvent = Event#event{special=[{message_received, ID, PatFun}]},
+            NewReceiveEvent = RecEvent#receive_event{message=Message#message{id=ID}},
+            NewEvent = Event#event{event_info = NewReceiveEvent, 
+                                   special=[{message_received, ID, PatFun}]},
             NewQueue = queue:join(Acc, NewSent),
             {NewEvent, NewQueue};
            false ->

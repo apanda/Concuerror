@@ -38,6 +38,12 @@ for msg in send_events:
 # What order do processes show up in the trace, and when
 seen_actors = []
 process_by_appearance = []
+for event in trace:
+  actor = str(event[1])
+  if actor not in seen_actors:
+     process_by_appearance.append(actor)
+     seen_actors.append(actor)
+process_first_seen = {}
 process_last_seen = {}
 num_interesting = defaultdict(lambda: 0)
 for (idx, event) in ordered_trace:
@@ -45,17 +51,17 @@ for (idx, event) in ordered_trace:
   process_last_seen[str(actor)] = idx
   if send_filter(event) or recv_filter(event):
     num_interesting[actor] += 1
-  if str(actor) not in seen_actors:
-      seen_actors.append(str(actor))
-      process_by_appearance.append((str(actor), idx))
-process_by_appearance = filter(lambda (actor, idx): num_interesting[actor] > 10, process_by_appearance)
-process_by_appearance = process_by_appearance[1:]
+  if str(actor) not in process_first_seen:
+    process_first_seen[actor] = idx
+process_by_appearance = filter(lambda actor: num_interesting[actor] > 0, process_by_appearance)
+#process_by_appearance = process_by_appearance[1:]
 filtered_order = filter(lambda (idx, ev): send_filter(ev) or recv_filter(ev), \
         ordered_trace)
 PIXEL_PER_SEQ = 1.25
-canvas_width = len(ordered_trace) * PIXEL_PER_SEQ + 8.0 + 20.0
-canvas_height = 920
 YMARGIN = 50
+XMARGIN = 50
+canvas_width = len(ordered_trace) * PIXEL_PER_SEQ + 8.0 + XMARGIN
+canvas_height = 920
 total_time = ordered_trace[-1][0]
 width_per_step = canvas_width/total_time
 height_per_process = (canvas_height - YMARGIN) /(2 + len(process_by_appearance))
@@ -68,18 +74,23 @@ ctx = cairo.Context (surface)
 process_line = {}
 ctx.set_source_rgb(0,0,0)
 ctx.set_line_width(PIXEL_PER_SEQ/2.0)
+ctx.set_font_size(6.0)
 for pidx in xrange(len(process_by_appearance)):
   y = (1 + pidx) * height_per_process + YMARGIN
-  (actor, start_idx) = process_by_appearance[pidx]
+  actor = process_by_appearance[pidx]
+  start_idx = process_first_seen[actor]
+  ctx.move_to(10, y)
+  ctx.show_text(str(actor))
   process_line[actor] = y
   end_idx = process_last_seen[actor]
   #print "%s %d %d"%(actor, start_idx, end_idx)
-  xstart = 20 + (start_idx * PIXEL_PER_SEQ)
-  xend = 20 + (end_idx * PIXEL_PER_SEQ)
+  xstart = XMARGIN + (start_idx * PIXEL_PER_SEQ)
+  xend = XMARGIN + (end_idx * PIXEL_PER_SEQ)
   #print "(%d %d) -> (%d %d)"%(xstart, y, xend, y)
   ctx.move_to(xstart, y)
   ctx.line_to(xend, y)
   ctx.stroke()
+ctx.set_font_size(2.0)
 recv_order = filter(lambda (idx, ev): recv_filter(ev), filtered_order)
 ctx.set_source_rgb(0.9, 0.9, 0.9)
 ctx.set_dash([1, 1])
@@ -91,7 +102,7 @@ for (idx, ev) in recv_order:
   msg_received = filter(lambda x: x[0] == erlastic.Atom('message_received'), ev[-1])
   if recv_actor not in process_line:
     continue
-  dest_x = 20 + (idx * PIXEL_PER_SEQ)
+  dest_x = XMARGIN + (idx * PIXEL_PER_SEQ)
   dest_y = process_line[recv_actor]
   if len(msg_received) == 0:
     continue # Don't know message sender
@@ -107,7 +118,7 @@ for (idx, ev) in recv_order:
     send_actor = str(send_event[1])
     if send_actor not in process_line:
       continue
-    src_x = 20 + (send_idx * PIXEL_PER_SEQ)
+    src_x = XMARGIN + (send_idx * PIXEL_PER_SEQ)
     src_y = process_line[send_actor]
     ctx.move_to(src_x, src_y)
     ctx.line_to(dest_x, dest_y)
@@ -117,7 +128,7 @@ for (idx, ev) in filtered_order:
   if actor not in process_line:
     continue
   actor_y = process_line[actor]
-  x = 20 + (idx * PIXEL_PER_SEQ)
+  x = XMARGIN + (idx * PIXEL_PER_SEQ)
   if send_filter(ev):
     ctx.set_source_rgb(240.0/255.0, 159.0/255.0, 71.0/255.0)
   elif is_after(ev):
@@ -132,7 +143,6 @@ for (idx, ev) in filtered_order:
     if hasattr(body, '__iter__') and erlastic.Atom('put_chars') in body:
       continue
     ctx.save()
-    ctx.set_font_size(2.0)
     ctx.move_to(x, actor_y - PIXEL_PER_SEQ * 2)
     ctx.rotate(-1.0 * math.pi/2)
     body = str(body)
@@ -155,9 +165,9 @@ for (idx, ev) in recv_order:
   send_actor = str(send_event[1])
   if send_actor not in process_line or recv_actor not in process_line:
     continue
-  src_x = 20 + (send_idx * PIXEL_PER_SEQ)
+  src_x = XMARGIN + (send_idx * PIXEL_PER_SEQ)
   src_y = process_line[send_actor]
-  dest_x = 20 + (idx * PIXEL_PER_SEQ)
+  dest_x = XMARGIN + (idx * PIXEL_PER_SEQ)
   dest_y = process_line[recv_actor]
   ctx.move_to(src_x, src_y)
   ctx.line_to(dest_x, dest_y)

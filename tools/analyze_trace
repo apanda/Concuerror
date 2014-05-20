@@ -1,0 +1,68 @@
+#!/usr/bin/env escript
+%% -*- erlang-indent-level: 2 -*-
+%%! +S1 -nostick -noshell -pa deps/bert.erl/ebin
+-include("concuerror.hrl").
+is_message_send(#event{special=Special}) ->
+  proplists:lookup(message, Special) =/= none.
+
+is_message_recv(#event{event_info=#receive_event{}}) ->
+  true;
+is_message_recv(_) ->
+  false.
+
+output_send_event(#event{special=Special, actor=Actor}) ->
+  {message, Message} = proplists:lookup(message, Special),
+  #message_event{recipient=Receiver, message=#message{data=Data, id=Id}} = Message,
+  io:format("~w ~w send ~w ~w~n", [Actor, Receiver, Id, Data]).
+
+output_recv_event(#event{event_info=
+                     #receive_event{message=Msg,
+                                   timeout=T},
+                     special = Special,
+                     actor=Actor}) ->
+  RecvId = case proplists:lookup(message_received, Special) of
+    {message_received, Rec, _} -> Rec;
+    none -> '_'
+  end,
+  case Msg of
+    #message{data=Data, id=Id} ->
+      io:format("~w  ~w receive ~w ~w~n", [RecvId, Actor, Id, Data]);
+    'after' ->
+      io:format("  ~w after ~w  ~n", [Actor, T])
+  end.
+
+
+output_trace([Ev | Rest]) ->
+  ok = case is_message_send(Ev) of
+    true -> output_send_event(Ev);
+    _ ->
+     case is_message_recv(Ev) of
+       true -> output_recv_event(Ev);
+       _ -> ok
+     end
+  end,
+  output_trace(Rest);
+output_trace([]) ->
+  ok.
+
+main(Args) ->
+  %ScriptDir = filename:dirname(escript:script_name()),
+  TraceFile = case length(Args) =/= 1 of
+    true ->
+      io:format(standard_error, "Usage ~p <trace_file>~n", [escript:script_name()]),
+      cl_exit(bad),
+      ok;
+    false -> 
+      [Fn] = Args, 
+      Fn
+  end,
+  {ok, TraceBin} = file:read_file(TraceFile),
+  Trace = bert:decode(TraceBin),
+  output_trace(Trace),
+  %io:format("Successfully decoded trace~n"),
+  cl_exit(completed).
+
+cl_exit(completed) ->
+  erlang:halt(0);
+cl_exit(_) ->
+  erlang:halt(1).
