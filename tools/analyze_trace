@@ -32,13 +32,24 @@ output_recv_event(#event{event_info=
   end.
 
 
+is_spawn(#event{special=Special}) ->
+  proplists:lookup(new, Special) =/= none.
+
+output_spawn(#event{actor=Actor, special=Special}) ->
+  {new, P} = proplists:lookup(new, Special),
+  io:format("   ~w spawn ~w  ~n", [Actor, P]).
+
 output_trace([Ev | Rest]) ->
   ok = case is_message_send(Ev) of
     true -> output_send_event(Ev);
     _ ->
      case is_message_recv(Ev) of
        true -> output_recv_event(Ev);
-       _ -> ok
+       _ ->
+        case is_spawn(Ev) of
+         true -> output_spawn(Ev);
+         _ -> ok
+        end
      end
   end,
   output_trace(Rest);

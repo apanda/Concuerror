@@ -7,6 +7,10 @@ def send_filter(inp):
   return inp[-1] != None and inp[-1][0][0] == erlastic.Atom('message')
 def recv_filter(inp):
   return inp[2][0] == erlastic.Atom('receive_event')
+def spawn_filter(inp):
+  return inp[-1] != None and \
+    len(filter(lambda i: i[0] == erlastic.Atom('new'), inp[-1])) > 0
+
 def is_after(inp):
   return inp[2][0] == erlastic.Atom('receive_event') and inp[2][1] == 'after'
 
@@ -18,7 +22,7 @@ decoder = bert.BERTDecoder()
 trace = decoder.decode(trace)
 
 
-filtered_trace = filter(lambda ev: send_filter(ev) or recv_filter(ev), \
+filtered_trace = filter(lambda ev: send_filter(ev) or recv_filter(ev) or spawn_filter(ev), \
         trace)
 ordered_trace = zip(xrange(len(filtered_trace)), filtered_trace)
 event_dict = {}
@@ -55,8 +59,10 @@ for (idx, event) in ordered_trace:
     process_first_seen[actor] = idx
 process_by_appearance = filter(lambda actor: num_interesting[actor] > 0, process_by_appearance)
 #process_by_appearance = process_by_appearance[1:]
-filtered_order = filter(lambda (idx, ev): send_filter(ev) or recv_filter(ev), \
+filtered_order = filter(lambda (idx, ev): send_filter(ev) or recv_filter(ev) or spawn_filter(ev), \
         ordered_trace)
+
+# Start drawing, first compute size
 PIXEL_PER_SEQ = 1.25
 YMARGIN = 50
 XMARGIN = 50
@@ -75,6 +81,8 @@ process_line = {}
 ctx.set_source_rgb(0,0,0)
 ctx.set_line_width(PIXEL_PER_SEQ/2.0)
 ctx.set_font_size(6.0)
+
+# Draw process timelines
 for pidx in xrange(len(process_by_appearance)):
   y = (1 + pidx) * height_per_process + YMARGIN
   actor = process_by_appearance[pidx]
@@ -90,6 +98,8 @@ for pidx in xrange(len(process_by_appearance)):
   ctx.move_to(xstart, y)
   ctx.line_to(xend, y)
   ctx.stroke()
+
+# Draw potentially related events
 ctx.set_font_size(2.0)
 recv_order = filter(lambda (idx, ev): recv_filter(ev), filtered_order)
 ctx.set_source_rgb(0.9, 0.9, 0.9)
@@ -123,6 +133,8 @@ for (idx, ev) in recv_order:
     ctx.move_to(src_x, src_y)
     ctx.line_to(dest_x, dest_y)
     ctx.stroke()
+
+# Draw send and receive blobs
 for (idx, ev) in filtered_order:
   actor = str(ev[1])
   if actor not in process_line:
@@ -131,10 +143,13 @@ for (idx, ev) in filtered_order:
   x = XMARGIN + (idx * PIXEL_PER_SEQ)
   if send_filter(ev):
     ctx.set_source_rgb(240.0/255.0, 159.0/255.0, 71.0/255.0)
-  elif is_after(ev):
-    ctx.set_source_rgb(10.0/255.0, 32.0/255.0, 42.0/255.0)
-  else:
-    ctx.set_source_rgb(141.0/255.0, 160.0/255.0, 203.0/255.0)
+  elif recv_filter(ev):
+    if is_after(ev):
+      ctx.set_source_rgb(10.0/255.0, 32.0/255.0, 42.0/255.0)
+    else:
+      ctx.set_source_rgb(141.0/255.0, 160.0/255.0, 203.0/255.0)
+  elif spawn_filter(ev):
+    ctx.set_source_rgb(168.0/255.0, 69.0/255.0, 22.0/255.0)
   ctx.arc(x, actor_y, PIXEL_PER_SEQ*2, 0, 2 * math.pi)
   ctx.fill()
   if send_filter(ev):
@@ -149,6 +164,8 @@ for (idx, ev) in filtered_order:
     body = body.replace('Atom', '')
     ctx.show_text(str(body)[:20])
     ctx.restore()
+
+# Draw causal lines between sends and receives
 ctx.set_source_rgb(0, 0, 0)
 ctx.set_dash([1, 1])
 ctx.set_line_width(PIXEL_PER_SEQ/2.0)
@@ -169,6 +186,25 @@ for (idx, ev) in recv_order:
   src_y = process_line[send_actor]
   dest_x = XMARGIN + (idx * PIXEL_PER_SEQ)
   dest_y = process_line[recv_actor]
+  ctx.move_to(src_x, src_y)
+  ctx.line_to(dest_x, dest_y)
+  ctx.stroke()
+
+# Draw causal lines between spawn and spawned processes
+ctx.set_source_rgb(168.0/255.0, 69.0/255.0, 22.0/255.0)
+ctx.set_dash([1, 2, 1, 1])
+ctx.set_line_width(PIXEL_PER_SEQ/2.0)
+spawn_order = filter(lambda (idx, ev): spawn_filter(ev), filtered_order)
+for (idx, ev) in spawn_order:
+  orig_actor = str(ev[1])
+  new_spec = filter(lambda i: i[0] == erlastic.Atom('new'), ev[-1])[0]
+  new_actor = str(new_spec[1])
+  if orig_actor not in process_line or new_actor not in process_line:
+    continue
+  src_x = XMARGIN + (idx * PIXEL_PER_SEQ)
+  src_y = process_line[orig_actor]
+  dest_x = XMARGIN + (process_first_seen[new_actor]* PIXEL_PER_SEQ)
+  dest_y = process_line[new_actor]
   ctx.move_to(src_x, src_y)
   ctx.line_to(dest_x, dest_y)
   ctx.stroke()
