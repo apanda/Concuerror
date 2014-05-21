@@ -45,17 +45,52 @@ match_received_to_sent(Event = #event{
 potential_filter(Receiver, PatFun, {Recipient, Message, _}) ->
   Receiver =:= Recipient andalso PatFun(Message).
 
+prune_messages([Ev|Rest], Rec, Messages, PotentialMessages) ->
+  case Ev of
+    #event{event_info=
+           #receive_event{recipient=Rec, 
+                          message=#message{id=ID},
+                          timeout=infinity}} ->
+      prune_messages(Rest,
+                     Rec,
+                     lists:filter(fun(M) -> {_, _, SID} = message_from_sent(M), SID =/= ID end, 
+                                  Messages),
+                     PotentialMessages);
+    #event{event_info=
+           #receive_event{recipient=Rec, 
+                          message=#message{id=ID},
+                          timeout=After}} ->
+      case lists:filter(fun(M) -> {_, _, SID} = message_from_sent(M), SID =:= ID end, Messages) of
+        [] ->  prune_messages(Rest,
+                     Rec,
+                     Messages,
+                     PotentialMessages);
+        [Msg] -> prune_messages(Rest,
+                     Rec,
+                     lists:filter(fun(M) -> {_, _, SID} = message_from_sent(M), SID =/= ID end, 
+                                  Messages),
+                     [Msg | PotentialMessages])
+      end;
+    _ -> prune_messages(Rest, Rec, Messages, PotentialMessages)
+  end;
+prune_messages([], _, _, PotentialMessages) ->
+  PotentialMessages;
+prune_messages(_, _, [], PotentialMessages) ->
+  PotentialMessages.
+
 potential_links(#event{
                   event_info=#receive_event{
                     recipient=Receiver,
                     patterns=PatFun
                   }},
+                PreviousEvents,
                 SentMessages) ->
-  MatchingSends = 
+  MatchingSendEvents = 
     lists:filter(fun (M) -> potential_filter(Receiver, PatFun, message_from_sent(M)) end,
               SentMessages),
+  MatchingSends = prune_messages(queue:to_list(PreviousEvents), Receiver, MatchingSendEvents, []),
   lists:map(fun (M) -> {_, _, ID} = message_from_sent(M), ID end, MatchingSends);
-potential_links(_, _) ->
+potential_links(_, _, _) ->
   [].
 
 assign_msg_hb([Ev|Rest], SentEvents, Acc) ->
@@ -70,21 +105,22 @@ assign_msg_hb(Events, SentEvents) ->
   EventQueue = queue:to_list(Events),
   queue:from_list(lists:reverse(assign_msg_hb(EventQueue, SentEvents, []))).
 
-assign_potential_links([Ev|Rest], SentEvents, Acc) ->
-  case potential_links(Ev, SentEvents) of 
-    [] -> assign_potential_links(Rest, SentEvents, [Ev|Acc]);
-    Links -> #event{special = Special} = Ev, 
+assign_potential_links([Ev|Rest], ExploredEvents, SentEvents, Acc) ->
+  case potential_links(Ev, ExploredEvents, SentEvents) of 
+    [] -> assign_potential_links(Rest, queue:in(Ev, ExploredEvents), SentEvents, [Ev|Acc]);
+    Links -> io:format("Found some potential links~n"), 
+          #event{special = Special} = Ev, 
              NewSpecial = [{possible_message_receives, Links} | Special],
-             assign_potential_links(Rest, SentEvents, [Ev#event{special=NewSpecial} | Acc])
+             assign_potential_links(Rest, queue:in(Ev, ExploredEvents), SentEvents, [Ev#event{special=NewSpecial} | Acc])
   end;
-assign_potential_links([], _, Acc) ->
+assign_potential_links([], _, _, Acc) ->
   lists:reverse(Acc).
 
 % Add metadata to events to indicate all possible sources for a message.
 -spec assign_potential_links(queue:queue(event()), queue:queue(event())) -> queue:queue(event()).
 assign_potential_links(Events, SentEvents)->
   SentList = queue:to_list(SentEvents), 
-  queue:from_list(assign_potential_links(queue:to_list(Events), SentList, [])).
+  queue:from_list(assign_potential_links(queue:to_list(Events), queue:new(), SentList, [])).
 
 % Output events to a file. The file is BERT encoded.
 -spec print_events(io:device(), [event()]) -> ok.

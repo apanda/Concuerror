@@ -63,9 +63,9 @@ filtered_order = filter(lambda (idx, ev): send_filter(ev) or recv_filter(ev) or 
         ordered_trace)
 
 # Start drawing, first compute size
-PIXEL_PER_SEQ = 1.25
 YMARGIN = 50
 XMARGIN = 50
+PIXEL_PER_SEQ = min(6.0, max(1.25, 1400.0 / float(len(ordered_trace))))
 canvas_width = len(ordered_trace) * PIXEL_PER_SEQ + 8.0 + XMARGIN
 canvas_height = 920
 total_time = ordered_trace[-1][0]
@@ -79,7 +79,7 @@ surface = cairo.PDFSurface("timeline.pdf", canvas_width, canvas_height)
 ctx = cairo.Context (surface)
 process_line = {}
 ctx.set_source_rgb(0,0,0)
-ctx.set_line_width(PIXEL_PER_SEQ/2.0)
+ctx.set_line_width(min(2.0, PIXEL_PER_SEQ/2.0))
 ctx.set_font_size(6.0)
 
 # Draw process timelines
@@ -102,9 +102,9 @@ for pidx in xrange(len(process_by_appearance)):
 # Draw potentially related events
 ctx.set_font_size(2.0)
 recv_order = filter(lambda (idx, ev): recv_filter(ev), filtered_order)
-ctx.set_source_rgb(0.9, 0.9, 0.9)
-ctx.set_dash([1, 1])
-ctx.set_line_width(PIXEL_PER_SEQ/4.0)
+ctx.set_source_rgb(0.8, 0.8, 0.8)
+#ctx.set_dash([1, 1])
+ctx.set_line_width(min(1.0, PIXEL_PER_SEQ/4.0))
 for (idx, ev) in recv_order:
   if not ev[-1]:
     continue
@@ -117,6 +117,8 @@ for (idx, ev) in recv_order:
   if len(msg_received) == 0:
     continue # Don't know message sender
   message_id = str(msg_received[0][1])
+  if len(filter(lambda x: x[0] == erlastic.Atom('possible_message_receives'), ev[-1])) == 0:
+    continue
   potential_receives = filter(lambda x: x[0] == erlastic.Atom('possible_message_receives'), ev[-1])[0][1]
   potential_receives = filter(lambda x: str(x) != message_id, potential_receives)
   for msg in potential_receives:
@@ -150,7 +152,7 @@ for (idx, ev) in filtered_order:
       ctx.set_source_rgb(141.0/255.0, 160.0/255.0, 203.0/255.0)
   elif spawn_filter(ev):
     ctx.set_source_rgb(168.0/255.0, 69.0/255.0, 22.0/255.0)
-  ctx.arc(x, actor_y, PIXEL_PER_SEQ*2, 0, 2 * math.pi)
+  ctx.arc(x, actor_y, min(2.5, PIXEL_PER_SEQ*2), 0, 2 * math.pi)
   ctx.fill()
   if send_filter(ev):
     #body = ev[-1][0]
@@ -168,7 +170,7 @@ for (idx, ev) in filtered_order:
 # Draw causal lines between sends and receives
 ctx.set_source_rgb(0, 0, 0)
 ctx.set_dash([1, 1])
-ctx.set_line_width(PIXEL_PER_SEQ/2.0)
+ctx.set_line_width(min(2.0, PIXEL_PER_SEQ/2.0))
 for (idx, ev) in recv_order:
   if not ev[-1]:
     continue
@@ -193,7 +195,7 @@ for (idx, ev) in recv_order:
 # Draw causal lines between spawn and spawned processes
 ctx.set_source_rgb(168.0/255.0, 69.0/255.0, 22.0/255.0)
 ctx.set_dash([1, 2, 1, 1])
-ctx.set_line_width(PIXEL_PER_SEQ/2.0)
+ctx.set_line_width(min(2.0, PIXEL_PER_SEQ/2.0))
 spawn_order = filter(lambda (idx, ev): spawn_filter(ev), filtered_order)
 for (idx, ev) in spawn_order:
   orig_actor = str(ev[1])
