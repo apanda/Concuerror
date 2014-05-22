@@ -72,21 +72,32 @@ run(Options) ->
   end.
 
 
-message_gather(Logger, Q) ->
+message_gather(Logger, FirstProcess, Q) ->
   receive
-    exited ->
-      io:format("Exited report~n"),
-      false = true;
+    {exited, FirstProcess} ->
+      io:format("Exited report ~p~n", [FirstProcess]),
+      Q;
+    {exited, P} ->
+      io:format("Exited report ~p~n", [P]),
+      message_gather(Logger, FirstProcess, Q);
+      %false = true;
+    {'EXIT', FirstProcess, Reason} ->
+        io:format("PPPP Scheduler exiting, having received ~p from ~p~n", [Reason, FirstProcess]),
+        Q;
     {'EXIT', X, What} ->
       io:format("EXIT ~p ~p~n", [X, What]),
-      false = true;
+      Q;
     #event{} = NewEvent ->
-        message_gather(Logger, queue:in(NewEvent, Q));
-    {quit, Sched} ->
-      ?debug(Logger, "About to send notification queue over, total message length is~p ~n",
-                [process_info(self(), message_queue_len)]),
-      Sched ! {msgs, Q}
+        ?debug(Logger, "~p ~n", [NewEvent]),
+        message_gather(Logger, FirstProcess, queue:in(NewEvent, Q));
+    {quit, Pid} -> Pid ! {msgs, Q}
   end.
+
+emulate_scheduler_updates([Ev | Rest], SchedulerState) ->
+  {ok, NewState} = update_state(Ev, SchedulerState),
+  emulate_scheduler_updates(Rest, NewState);
+emulate_scheduler_updates([], SchedulerState=#scheduler_state{trace=[_|Trace]}) ->
+  SchedulerState#scheduler_state{trace=Trace}.
 
 -spec run_instrumented(options()) -> ok.
 run_instrumented(Options) ->
@@ -100,39 +111,72 @@ run_instrumented(Options) ->
     false ->
       ok
   end,
-  [Target, Logger, {Provenance, ProvenanceName}] =
+  [AllowFirstCrash,AssumeRacing,DepthBound,IgnoreError,Logger,NonRacingSystem,
+   PrintDepth,Processes,Target,Timeout,TreatAsNormal, {Provenance, ProvenanceName}] =
     get_properties(
-      [target, logger, provenance],
+      [allow_first_crash,assume_racing,depth_bound,ignore_error,logger,
+       non_racing_system,print_depth,processes,target,timeout,treat_as_normal, provenance],
       Options),
   ProcessOptions =
     [O || O <- Options, concuerror_options:filter_options('process', O)],
-  GatherPid = spawn_link(fun() -> message_gather(Logger, queue:new()) end),
   ?debug(Logger, "Starting first process...~n",[]),
+  GatherPid = spawn_link(fun() -> message_gather(Logger, 0, queue:new()) end),
   FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions, GatherPid),
+  InitialTrace = #trace_state{active_processes = [FirstProcess]},
   ok = concuerror_callback:start_instrument_only_process(FirstProcess, Target),
   ?time(Logger, "Exploration start"),
   receive
       {'EXIT', FirstProcess, Reason} ->
           io:format("PPPP Scheduler exiting, having received ~p from ~p~n", [Reason, FirstProcess])
   end,
+  %io:format("Process is ~p~n", [FirstProcess]),
+  %Trace = message_gather(Logger, FirstProcess, queue:new()),
   GatherPid ! {quit, self()},
-  Messages = receive 
+  Trace = receive 
       {msgs, Q} -> Q
   end,
-  io:format("This run involved ~p events ~n", [queue:len(Messages)]),
-  SentMessages = queue:filter(fun concuerror_hb:sent_message_filter/1, Messages),
+  io:format("This run involved ~p events ~n", [queue:len(Trace)]),
+  SentMessages = queue:filter(fun concuerror_hb:sent_message_filter/1, Trace),
   io:format("This run had ~p sent messages~n", [queue:len(SentMessages)]),
   io:format("Start assigning happens before~n"),
-  HBMessages = concuerror_hb:assign_msg_hb(Messages, SentMessages),
-  AnnotatedMessages = concuerror_hb:assign_potential_links(HBMessages, SentMessages),
+  % At this point we have fixed up message IDs and other annoying things necessary for the scheduler
+  % state to be generated (I think)
+  HBTrace = concuerror_hb:assign_msg_hb(Trace, SentMessages),
+  InitialState =
+    #scheduler_state{
+       allow_first_crash = AllowFirstCrash,
+       assume_racing = AssumeRacing,
+       depth_bound = DepthBound,
+       first_process = {FirstProcess, Target},
+       ignore_error = IgnoreError,
+       logger = Logger,
+       message_info = ets:new(message_info, [private]),
+       non_racing_system = NonRacingSystem,
+       print_depth = PrintDepth,
+       processes = Processes,
+       trace = [InitialTrace],
+       treat_as_normal = TreatAsNormal,
+       timeout = Timeout,
+       provenance = Provenance,
+       provenance_name = ProvenanceName
+      },
+  AnnotatedTrace = concuerror_hb:assign_potential_links(HBTrace, SentMessages),
   io:format("Done assigning happens before~n"),
   file:close(Provenance), 
   {ok, Dev} = file:open(ProvenanceName, [write, raw, delayed_write]), 
-  concuerror_hb:print_events(Dev, queue:to_list(AnnotatedMessages)),
-  io:format("Done about to return~n").
+  concuerror_hb:print_events(Dev, queue:to_list(AnnotatedTrace)),
+  io:format("Done writing events~n"),
+  io:format("Figuring out other interleavings~n"),
+  FinalState = emulate_scheduler_updates(queue:to_list(HBTrace), InitialState),
+  RacesDetectedState = plan_more_interleavings(FinalState),
+  ?trace(Logger, "Done planning interleavings~n", []),
+  io:format("Log wakeup tree~n"),
+  log_wakeup_tree(RacesDetectedState),
+  LogState = log_trace(RacesDetectedState).
+  %{HasMore, NewState} = has_more_to_explore(LogState),
+  %io:format("Has more to explore ~p~n", [HasMore]),
 
 -spec run_dpor(options()) -> ok.
-
 run_dpor(Options) ->
   %io:format("In run_dpor~n"),
   % Want to trap any exit signals (other than kill)
@@ -189,6 +233,10 @@ get_properties([Prop|Rest], Options, Acc) ->
 
 %%------------------------------------------------------------------------------
 
+log_wakeup_tree(#scheduler_state{logger=Logger,
+                                trace=[#trace_state{wakeup_tree=Wakeup}|_]}) ->
+  ?trace(Logger, "Wakeup tree is ~p~n", [Wakeup]).
+
 % Actually explore things.
 explore(#scheduler_state{logger = Logger} = State) ->
   {Status, UpdatedState} =
@@ -205,8 +253,10 @@ explore(#scheduler_state{logger = Logger} = State) ->
       ?trace(Logger, "============================================================================~n", []),
       ?trace(Logger, "                     Starting New Exploration                               ~n", []),
       ?trace(Logger, "============================================================================~n", []),
+      log_wakeup_tree(UpdatedState),
       RacesDetectedState = plan_more_interleavings(UpdatedState),
       ?trace(Logger, "Done planning interleavings~n", []),
+      log_wakeup_tree(UpdatedState),
       LogState = log_trace(RacesDetectedState),
       ?trace(Logger, "Logged this info~n", []),
       {HasMore, NewState} = has_more_to_explore(LogState),
@@ -267,6 +317,7 @@ filter_warnings(Warnings, [Ignore|Rest] = Ignored) ->
     {value, _, NewWarnings} -> filter_warnings(NewWarnings, Ignored)
   end.
 
+% Exploration depth exceeded, stop exploring.
 get_next_event(
   #scheduler_state{
      current_warnings = Warnings,
@@ -279,7 +330,7 @@ get_next_event(
   {none, NewState};
 
 %% Initially WakeupTree is empty, AvailablePendingMessages is [] and only initial
-%% process is active
+%% process is active.
 get_next_event(#scheduler_state{trace = [Last|_]} = State) ->
   #trace_state{
      active_processes = ActiveProcesses,

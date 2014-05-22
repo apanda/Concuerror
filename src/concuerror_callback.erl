@@ -94,10 +94,10 @@ start_first_process(Pid, {Module, Name, Args}, Timeout) ->
   ok.
 
 -spec start_instrument_only_process(pid(), {atom(), atom(), [term()]}) -> ok.
-
 start_instrument_only_process(Pid, {Module, Name, Args}) ->
   Pid ! {start_instrument, Module, Name, Args},
   ok.
+
 
 %%------------------------------------------------------------------------------
 
@@ -618,8 +618,6 @@ run_built_in(erlang, spawn_opt, 1, [{Module, Name, Args, SpawnOpts}], Info) ->
   true = ets:update_element(Processes, Pid, {?process_leader, GroupLeader}),
   case InstrumentOnly of
     false ->
-      %Pid ! {start, Module, Name, Args},
-      %wait_process(Pid, Timeout);
       start_first_process(Pid, {Module, Name, Args}, Timeout);
     true ->
       start_instrument_only_process (Pid, {Module, Name, Args})
@@ -980,7 +978,7 @@ find_system_reply(System, [_|Special]) ->
                           'exited' | 'retry' | {'ok', event()}.
 
 wait_actor_reply(Event, Timeout) ->
-  %io:format("Waiting ~n"),
+  io:format("Wait actor reply called~n"),
   Resp = receive
     exited -> exited;
     {blocked, _} ->  retry;
@@ -990,7 +988,8 @@ wait_actor_reply(Event, Timeout) ->
     {'EXIT', _, What} ->
       exit(What)
   after
-    Timeout -> ?crash({process_did_not_respond, Timeout, Event#event.actor})
+    Timeout -> 
+    ?crash({process_did_not_respond, Timeout, Event#event.actor})
   end,
   %io:format("Received ~p~n", [Resp]),
   Resp.
@@ -1149,8 +1148,26 @@ process_top_loop(Info) ->
     {start_instrument, Module, Name, Args} ->
       ?debug_flag(?loop, {start_instrument, Module, Name, Args}),
       put(concuerror_info, Info#concuerror_info{is_instrument_only=true}),
-      concuerror_inspect:instrumented(call, [Module, Name, Args], start),
-      exit(normal);
+      %try
+        concuerror_inspect:instrumented(call, [Module, Name, Args], start),
+        exit(normal);
+      %catch
+        %exit:{?MODULE, _} = Reason -> exit(Reason);
+        %Class:Reason ->
+          %case erase(concuerror_info) of
+            %#concuerror_info{} = EndInfo ->
+              %Stacktrace = fix_stacktrace(EndInfo),
+              %?debug_flag(?exit, {exit, Class, Reason, Stacktrace}),
+              %NewReason =
+                %case Class of
+                  %throw -> {{nocatch, Reason}, Stacktrace};
+                  %error -> {Reason, Stacktrace};
+                  %exit  -> Reason
+                %end,
+              %exiting(NewReason, Stacktrace, EndInfo);
+            %_ -> exit({process_crashed, Class, Reason, erlang:get_stacktrace()})
+          %end
+      %end;
     {start, Module, Name, Args} ->
       ?debug_flag(?loop, {start, Module, Name, Args}),
       put(concuerror_info, Info),
@@ -1214,6 +1231,20 @@ process_loop(#concuerror_info{notify_when_ready = {Pid, true}} = Info) ->
   % for the first time.
   Pid ! ready,
   process_loop(Info#concuerror_info{notify_when_ready = {Pid, false}});
+process_loop(#concuerror_info{is_instrument_only=true, scheduler=Sched}=InfoIn) ->
+  FakeEvent = #event{actor = self(),
+                 label = make_ref()},
+  Status = InfoIn#concuerror_info.status,
+  Info = case Status =:= exited of
+    true -> io:format("CONC ~p has exited~n", [self()]),
+            I = notify({exited, self()}, InfoIn),
+            io:format("CONC ~p has exited, notified ~p~n", [self(), Sched]),
+            I;
+            %I2 = I#concuerror_info{is_instrument_only=false},
+            %process_loop(I2);
+    false -> InfoIn
+  end,
+  Info#concuerror_info{event=FakeEvent};
 process_loop(Info) ->
   ?debug_flag(?loop, process_loop),
   receive
