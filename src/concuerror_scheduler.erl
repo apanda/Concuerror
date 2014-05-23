@@ -90,7 +90,10 @@ message_gather(Logger, FirstProcess, Q) ->
     #event{} = NewEvent ->
         ?debug(Logger, "~p ~n", [NewEvent]),
         message_gather(Logger, FirstProcess, queue:in(NewEvent, Q));
-    {quit, Pid} -> Pid ! {msgs, Q}
+    {quit, Pid} -> Pid ! {msgs, Q};
+    Other ->
+      io:format("Unexpected message ~p~n", [Other]),
+      Q
   end.
 
 emulate_scheduler_updates([Ev | Rest], SchedulerState) ->
@@ -120,21 +123,22 @@ run_instrumented(Options) ->
   ProcessOptions =
     [O || O <- Options, concuerror_options:filter_options('process', O)],
   ?debug(Logger, "Starting first process...~n",[]),
-  GatherPid = spawn_link(fun() -> message_gather(Logger, 0, queue:new()) end),
-  FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions, GatherPid),
+  %GatherPid = spawn_link(fun() -> message_gather(Logger, 0, queue:new()) end),
+  %FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions, GatherPid),
+  FirstProcess = concuerror_callback:spawn_first_process(ProcessOptions),
   InitialTrace = #trace_state{active_processes = [FirstProcess]},
   ok = concuerror_callback:start_instrument_only_process(FirstProcess, Target),
   ?time(Logger, "Exploration start"),
-  receive
-      {'EXIT', FirstProcess, Reason} ->
-          io:format("PPPP Scheduler exiting, having received ~p from ~p~n", [Reason, FirstProcess])
-  end,
+  %receive
+      %{'EXIT', FirstProcess, Reason} ->
+          %io:format("PPPP Scheduler exiting, having received ~p from ~p~n", [Reason, FirstProcess])
+  %end,
   %io:format("Process is ~p~n", [FirstProcess]),
-  %Trace = message_gather(Logger, FirstProcess, queue:new()),
-  GatherPid ! {quit, self()},
-  Trace = receive 
-      {msgs, Q} -> Q
-  end,
+  Trace = message_gather(Logger, FirstProcess, queue:new()),
+  %GatherPid ! {quit, self()},
+  %Trace = receive 
+      %{msgs, Q} -> Q
+  %end,
   io:format("This run involved ~p events ~n", [queue:len(Trace)]),
   SentMessages = queue:filter(fun concuerror_hb:sent_message_filter/1, Trace),
   io:format("This run had ~p sent messages~n", [queue:len(SentMessages)]),
@@ -169,12 +173,10 @@ run_instrumented(Options) ->
   io:format("Figuring out other interleavings~n"),
   FinalState = emulate_scheduler_updates(queue:to_list(HBTrace), InitialState),
   RacesDetectedState = plan_more_interleavings(FinalState),
-  ?trace(Logger, "Done planning interleavings~n", []),
-  io:format("Log wakeup tree~n"),
-  log_wakeup_tree(RacesDetectedState),
-  LogState = log_trace(RacesDetectedState).
-  %{HasMore, NewState} = has_more_to_explore(LogState),
-  %io:format("Has more to explore ~p~n", [HasMore]),
+  ?trace(Logger, "Done planning interleavings~n", []).
+  %io:format("Log wakeup tree~n"),
+  %log_wakeup_tree(RacesDetectedState),
+  %LogState = log_trace(RacesDetectedState).
 
 -spec run_dpor(options()) -> ok.
 run_dpor(Options) ->

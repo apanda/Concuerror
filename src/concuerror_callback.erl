@@ -57,10 +57,10 @@ spawn_first_process(Options) ->
 
 spawn_first_process(Options, Sched) ->
   [AfterTimeout, InstantDelivery, Logger, Modules, Processes,
-   ReportUnknown, Timeout] =
+   ReportUnknown, Timeout, Instrumented] =
     concuerror_common:get_properties(
       [after_timeout, instant_delivery, logger, modules, processes,
-       report_unknown, timeout],
+       report_unknown, timeout, instrumented],
       Options),
   EtsTables = ets:new(ets_tables, [public]),
   ets:insert(EtsTables, {tid,1}),
@@ -76,7 +76,8 @@ spawn_first_process(Options, Sched) ->
        processes      = Processes,
        report_unknown = ReportUnknown,
        scheduler      = Sched,
-       timeout        = Timeout
+       timeout        = Timeout,
+       is_instrument_only = Instrumented
       },
   system_processes_wrappers(Info),
   system_ets_entries(Info),
@@ -1149,25 +1150,32 @@ process_top_loop(Info) ->
       ?debug_flag(?loop, {start_instrument, Module, Name, Args}),
       put(concuerror_info, Info#concuerror_info{is_instrument_only=true}),
       %try
+      try
         concuerror_inspect:instrumented(call, [Module, Name, Args], start),
-        exit(normal);
-      %catch
-        %exit:{?MODULE, _} = Reason -> exit(Reason);
-        %Class:Reason ->
-          %case erase(concuerror_info) of
-            %#concuerror_info{} = EndInfo ->
-              %Stacktrace = fix_stacktrace(EndInfo),
-              %?debug_flag(?exit, {exit, Class, Reason, Stacktrace}),
-              %NewReason =
-                %case Class of
-                  %throw -> {{nocatch, Reason}, Stacktrace};
-                  %error -> {Reason, Stacktrace};
-                  %exit  -> Reason
-                %end,
-              %exiting(NewReason, Stacktrace, EndInfo);
-            %_ -> exit({process_crashed, Class, Reason, erlang:get_stacktrace()})
-          %end
-      %end;
+        exit(normal)
+      catch
+        exit:{?MODULE, _} = Reason -> exit(Reason);
+        Class:Reason ->
+          io:format("CONC ~p exiting because: ~p:~p ", [self(), Class, Reason]),
+          ConcuerrorInfo = case erase(concuerror_info) of 
+            #concuerror_info{} = CInfo ->
+              io:format(" found concuerror_info"),
+              CInfo;
+            _ ->
+              exit({process_crashed, Class, Reason, erlang:get_stacktrace()})
+          end,
+          Stacktrace = fix_stacktrace(ConcuerrorInfo),
+          ?debug_flag(?exit, {exit, Class, Reason, Stacktrace}),
+          NewReason =
+            case Class of
+              throw -> {{nocatch, Reason}, Stacktrace};
+              error -> {Reason, Stacktrace};
+              exit  -> Reason
+            end,
+          io:format(" fixed reason ~p~n", [NewReason]),
+          io:format("~n"),
+          exiting(NewReason, Stacktrace, ConcuerrorInfo)
+      end;
     {start, Module, Name, Args} ->
       ?debug_flag(?loop, {start, Module, Name, Args}),
       put(concuerror_info, Info),
@@ -1209,7 +1217,7 @@ process_top_loop(Info) ->
 
 new_process(#concuerror_info{is_instrument_only=true}=ParentInfo) ->
   % Start a new process.
-  Info = ParentInfo#concuerror_info{notify_when_ready = {self(), true}},
+  Info = ParentInfo#concuerror_info{notify_when_ready = {self(), false}},
   spawn(fun() -> process_top_loop(Info) end);
 new_process(ParentInfo) ->
   % Start a new process.
@@ -1354,6 +1362,7 @@ exiting(Reason, Stacktrace, #concuerror_info{status = Status} = InfoIn) ->
   %% XXX:  - transfer ets ownership and send message or delete table
   %% XXX:  - send link signals
   %% XXX:  - send monitor messages
+  io:format("~p exiting ~p~n", [self(), Reason]),
   ?debug_flag(?loop, {going_to_exit, Reason}),
   Info = process_loop(InfoIn),
   Self = self(),
@@ -1399,6 +1408,7 @@ exiting(Reason, Stacktrace, #concuerror_info{status = Status} = InfoIn) ->
   FinalInfo =
     lists:foldl(FunFold, ExitInfo#concuerror_info{exit_reason = Reason}, FunList),
   ?debug_flag(?loop, exited),
+  io:format("~p exiting done ~p~n", [self(), Reason]),
   process_loop(set_status(FinalInfo, exited)).
 
 ets_ownership_exiting_events(Info) ->
