@@ -75,7 +75,7 @@ run(Options) ->
 message_gather(Logger, FirstProcess, Q) ->
   receive
     {exited, FirstProcess} ->
-      io:format("Exited report ~p~n", [FirstProcess]),
+      io:format("First Process Exit report ~p~n", [FirstProcess]),
       Q;
     {exited, P} ->
       io:format("Exited report ~p~n", [P]),
