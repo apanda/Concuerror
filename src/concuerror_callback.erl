@@ -1239,11 +1239,7 @@ process_loop(#concuerror_info{is_instrument_only=true}=InfoIn) ->
                  label = make_ref()},
   Status = InfoIn#concuerror_info.status,
   Info = case Status =:= exited of
-    true -> Ninfo = notify({exited, self()}, InfoIn),
-            Ninfo#concuerror_info{is_instrument_only=false};
-            %process_loop(NonInstrumentedInfo);
-            %I2 = I#concuerror_info{is_instrument_only=false},
-            %process_loop(I2);
+    true -> Ninfo = notify({exited, self()}, InfoIn);
     false -> InfoIn
   end,
   Info#concuerror_info{event=FakeEvent};
