@@ -96,7 +96,12 @@ modify_receive_clause(Clause, MatchFun, Timeout) ->
   Body = cerl:clause_body(Clause),
   % Poor man's assertion, number of patterns in clause are 1
   1 = length(Pats),
-  [PatBody] = Pats,
+  [PatBodyInternal] = Pats,
+  PatBody = case cerl:is_c_alias(PatBodyInternal) of
+    true -> cerl:alias_var(PatBodyInternal);
+    false -> PatBodyInternal
+  end,
+  %io:format("Pattern body is ~p~n", [PatBody]),
   CallToRecord = cerl:update_tree(Clause, call,
                                   [[cerl:c_atom(?inspect)],
                                    [cerl:c_atom(instrumented_recv)],
