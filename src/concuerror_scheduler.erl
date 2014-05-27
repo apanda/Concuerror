@@ -157,12 +157,12 @@ run_instrumented(Options) ->
   io:format("Done assigning happens before~n"),
   file:close(Provenance), 
   {ok, Dev} = file:open(ProvenanceName, [write, raw, delayed_write]), 
-  concuerror_hb:print_events(Dev, queue:to_list(AnnotatedTrace)),
-  io:format("Done writing events~n"),
-  io:format("Figuring out other interleavings~n"),
-  FinalState = emulate_scheduler_updates(queue:to_list(HBTrace), InitialState),
-  RacesDetectedState = plan_more_interleavings(FinalState),
-  ?trace(Logger, "Done planning interleavings~n", []).
+  concuerror_hb:print_events(Dev, queue:to_list(AnnotatedTrace)).
+  %io:format("Done writing events~n"),
+  %io:format("Figuring out other interleavings~n"),
+  %FinalState = emulate_scheduler_updates(queue:to_list(HBTrace), InitialState),
+  %RacesDetectedState = plan_more_interleavings(FinalState),
+  %?trace(Logger, "Done planning interleavings~n", []).
 
 -spec run_dpor(options()) -> ok.
 run_dpor(Options) ->
