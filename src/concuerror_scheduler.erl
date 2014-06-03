@@ -71,25 +71,64 @@ run(Options) ->
       run_dpor(Options)
   end.
 
+wait_loop(Q, Pids) ->
+  case orddict:size(Pids) =:= 0 of
+    true ->
+      io:format("All processes ended~n"),
+      Q;
+    false ->
+      io:format("Waiting for ~p processes~n", [orddict:size(Pids)]),
+      receive
+        {exited, P} ->
+          io:format("Exited report ~p~n", [P]),
+          [true] = orddict:fetch(P, Pids),
+          orddict:erase(P, Pids),
+          wait_loop(Q, Pids);
+          %false = true;
+        {'EXIT', X, What} ->
+          io:format("EXIT ~p ~p~n", [X, What]),
+          Q;
+        #event{special = [{new, P}]} = NewEvent ->
+            wait_loop(queue:in(NewEvent, Q), orddict:append(P, true, Pids));
+        #event{} = NewEvent ->
+            wait_loop(queue:in(NewEvent, Q), Pids);
+        {quit, Pid} -> Pid ! {msgs, Q};
+        Other ->
+          io:format("Unexpected message ~p~n", [Other]),
+          Q
+      end
+  end.
 
-message_gather(Logger, FirstProcess, Q) ->
+kill_all(Q, Pids) ->
+  io:format("Trying to killall~n"),
+  [exit(Pid, reset) || Pid <- orddict:fetch_keys(Pids)],
+  wait_loop(Q, Pids).
+
+message_gather(Logger, FirstProcess, Q, Pids) ->
   receive
     {exited, FirstProcess} ->
+      orddict:erase(FirstProcess, Pids),
       io:format("First Process Exit report ~p~n", [FirstProcess]),
-      Q;
+      kill_all(Q, Pids);
     {exited, P} ->
       io:format("Exited report ~p~n", [P]),
-      message_gather(Logger, FirstProcess, Q);
+      [true] = orddict:fetch(P, Pids),
+      orddict:erase(P, Pids),
+      message_gather(Logger, FirstProcess, Q, Pids);
       %false = true;
     {'EXIT', FirstProcess, Reason} ->
+        orddict:erase(FirstProcess, Pids),
         io:format("PPPP Scheduler exiting, having received ~p from ~p~n", [Reason, FirstProcess]),
-        Q;
+        kill_all(Q, Pids);
     {'EXIT', X, What} ->
       io:format("EXIT ~p ~p~n", [X, What]),
       Q;
+    #event{special = [{new, P}]} = NewEvent ->
+        io:format("New process ~p~n", [P]),
+        message_gather(Logger, FirstProcess, queue:in(NewEvent, Q), orddict:append(P, true, Pids));
     #event{} = NewEvent ->
         ?debug(Logger, "~p ~n", [NewEvent]),
-        message_gather(Logger, FirstProcess, queue:in(NewEvent, Q));
+        message_gather(Logger, FirstProcess, queue:in(NewEvent, Q), Pids);
     {quit, Pid} -> Pid ! {msgs, Q};
     Other ->
       io:format("Unexpected message ~p~n", [Other]),
@@ -127,7 +166,7 @@ run_instrumented(Options) ->
   InitialTrace = #trace_state{active_processes = [FirstProcess]},
   ok = concuerror_callback:start_instrument_only_process(FirstProcess, Target),
   ?time(Logger, "Exploration start"),
-  Trace = message_gather(Logger, FirstProcess, queue:new()),
+  Trace = message_gather(Logger, FirstProcess, queue:new(), orddict:from_list([{FirstProcess, true}])),
   io:format("This run involved ~p events ~n", [queue:len(Trace)]),
   SentMessages = queue:filter(fun concuerror_hb:sent_message_filter/1, Trace),
   io:format("This run had ~p sent messages~n", [queue:len(SentMessages)]),
